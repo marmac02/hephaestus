@@ -111,7 +111,7 @@ class Generator():
         """
         candidates = [
             self.gen_variable_decl,
-            self.gen_class_decl,
+            #self.gen_class_decl,
             self.gen_func_decl,
         ]
         gen_func = ut.random.choice(candidates)
@@ -1899,7 +1899,7 @@ class Generator():
             ],
         }
         other_candidates = [
-            lambda x: self.gen_field_access(x, only_leaves, subtype),
+            #lambda x: self.gen_field_access(x, only_leaves, subtype), #disabling for now
             lambda x: self.gen_conditional(x, only_leaves=only_leaves,
                                            subtype=subtype),
             lambda x: self.gen_is_expr(x, only_leaves=only_leaves,
@@ -2541,6 +2541,7 @@ class Generator():
             # as function references.
             signature
         )
+        gen_method = False #disabling methods for now
         if not gen_method:
             initial_namespace = self.namespace
             # If the given type 'etype' is a type parameter, then the
