@@ -64,6 +64,10 @@ class RustTranslator(BaseTranslator):
     def _parent_is_block(self):
         return isinstance(self._nodes_stack[-2], ast.Block)
 
+    #??? might be wrong
+    def _is_global_scope(self):
+        return len(self._nodes_stack) == 1
+
     def visit_program(self, node):
         self.context = node.context
         children = node.children()
@@ -79,6 +83,7 @@ class RustTranslator(BaseTranslator):
     
     @append_to
     def visit_block(self, node):
+        old_indent = self.indent
         children = node.children()
         is_unit = self.is_unit
         is_lambda = self.is_lambda
@@ -105,13 +110,12 @@ class RustTranslator(BaseTranslator):
             else ""
         )
         if children_res:
-            res += " " * self.indent + \
-                   children_res[-1] + last_char + "\n" + \
-                   " " * self.indent
+            res +=  children_res[-1] + last_char + "\n" #+ \
+                   #" " * self.indent
         else:
             res += " " * self.indent + last_char + "\n" + \
                    " " * self.indent
-        res += "}"
+        res += " " * old_indent + "}"
         self.is_unit = is_unit
         self.is_lambda = is_lambda
         return res
@@ -130,7 +134,7 @@ class RustTranslator(BaseTranslator):
         for c in children:
             c.accept(self)
         children_res = self.pop_children_res(children)
-        param_res = [children_res[i] for i in range(node.params)]
+        param_res = [children_res[i] for i,_ in enumerate(node.params)]
         len_params = len(node.params)
         len_type_params = len(node.type_parameters)
         type_parameters_res = ", ".join(children_res[len_params:len_type_params + len_params])
@@ -215,7 +219,7 @@ class RustTranslator(BaseTranslator):
             c.accept(self)
         children_res = self.pop_children_res(children)
         self.indent = old_indent
-        param_res = [children_res[i] for i in range(node.params)]
+        param_res = [children_res[i] for i,_ in enumerate(node.params)]
         body_res = children_res[-1] if node.body else ""
         '''ret_type_str = (
             ": " + self.get_type_name(node.ret_type)
@@ -354,8 +358,8 @@ class RustTranslator(BaseTranslator):
     
     @append_to
     def visit_variable(self, node):
-        return "{name}{semicolon}".format(
-            #indent=" " * self.indent,
+        return "{indent}{name}{semicolon}".format(
+            indent=" " * self.indent if self._parent_is_block() else "",
             name=node.name,
             semicolon="" if self._parent_is_block() else "" #???
         )
@@ -372,11 +376,15 @@ class RustTranslator(BaseTranslator):
         for c in children:
             c.accept(self)
         children_res = self.pop_children_res(children)
-        var_type = "let " if node.is_final else "let mut "
-        res = prefix + var_type + node.name
-        if node.var_type is not None:
-            res += ": " + self.get_type_name(node.var_type)
-        res += " = " + children_res[0] + ";"
+        if self._is_global_scope():
+            #static variables must have type annotation
+            res = "static " + node.name + ": " + self.get_type_name(node.var_type) + " = " + children_res[0] + ";"
+        else:
+            mut = "let " if node.is_final else "let mut "
+            res = prefix + mut + node.name
+            if node.var_type is not None:
+                res += ": " + self.get_type_name(node.var_type)
+            res += " = " + children_res[0]
         self.indent = old_indent
         self._cast_number = prev
         return res
