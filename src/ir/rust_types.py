@@ -166,8 +166,17 @@ class BoolType(RustBuiltin):
 class ArrayType(tp.TypeConstructor, RustBuiltin):
     pass
 
+#fix covariance/contra-variance
 class FunctionType(tp.TypeConstructor, RustBuiltin):
-    pass
+    def __init__(self, nr_type_parameters: int):
+        name = "fn"
+        type_parameters = [tp.TypeParameter("A" + str(i), tp.Contravariant) 
+            for i in range(nr_type_parameters + 1)] + [tp.TypeParameter("R", tp.Covariant)]
+        self.nr_type_parameters = nr_type_parameters
+        super().__init__(name, type_parameters)
 
 class TupleType(tp.TypeConstructor, RustBuiltin):
     pass
+
+
+Unit = UnitType()
