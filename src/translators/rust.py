@@ -47,11 +47,21 @@ class RustTranslator(BaseTranslator):
     def get_incorrect_filename():
         return RustTranslator.incorrect_filename
         
-    def type_arg2str(self, t_arg): #TODO
-        pass
+    def type_arg2str(self, t_arg): #check if correct
+        if not isinstance(t_arg, tp.WildCardType):
+            return self.get_type_name(t_arg)
+        return "type_arg2str ERROR"
 
-    def get_type_name(self, t): #TODO
-        return t.get_name()
+    def get_type_name(self, t): #check if correct
+        if t.is_wildcard():
+            t = t.get_bound_rec()
+            return self.get_type_name(t)
+        t_counstructor = getattr(t, 't_constructor', None)
+        if not t_counstructor:
+            return t.get_name()
+        if t.is_func_type:
+            return "fn(" + ", ".join([self.type_arg2str(t.type_args[ind]) for ind in (len(t.type_args) - 1)]) + ") -> " + self.type_arg2str(t.type_args[-1])
+        return "{}<{}>".format(t.name, ", ".join([self.type_arg2str(t_arg) for t_arg in t.type_args]))
 
     def pop_children_res(self, children):
         len_c = len(children)
@@ -377,7 +387,7 @@ class RustTranslator(BaseTranslator):
             c.accept(self)
         children_res = self.pop_children_res(children)
         if self._is_global_scope():
-            #static variables must have type annotation
+            #static variables must have type annotation and be immutable (mutable only with unsafe)
             res = "static " + node.name + ": " + self.get_type_name(node.var_type) + " = " + children_res[0] + ";"
         else:
             mut = "let " if node.is_final else "let mut "
