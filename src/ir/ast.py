@@ -1080,6 +1080,10 @@ class LogicalExpr(BinaryOp):
         "scala": [
             Operator('&&'),
             Operator('||')
+        ],
+        "rust": [
+            Operator('&&'),
+            Operator('||')
         ]
     }
 
@@ -1109,6 +1113,10 @@ class EqualityExpr(BinaryOp):
             Operator('=', is_not=True)
         ],
         "scala": [
+            Operator('=='),
+            Operator('=', is_not=True)
+        ],
+        "rust": [
             Operator('=='),
             Operator('=', is_not=True)
         ]
@@ -1142,6 +1150,12 @@ class ComparisonExpr(BinaryOp):
             Operator('<=')
         ],
         "scala": [
+            Operator('>'),
+            Operator('>='),
+            Operator('<'),
+            Operator('<=')
+        ],
+        "rust": [
             Operator('>'),
             Operator('>='),
             Operator('<'),
@@ -1182,6 +1196,12 @@ class ArithExpr(BinaryOp):
             Operator('/'),
             Operator('*')
         ],
+        "rust": [
+            Operator('+'),
+            Operator('-'),
+            Operator('/'),
+            Operator('*')
+        ]
     }
 
 
