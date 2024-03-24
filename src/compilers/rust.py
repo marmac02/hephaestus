@@ -21,5 +21,5 @@ class RustCompiler(BaseCompiler):
     def get_filename(self, match):
         return match[1]
 
-    def error_msg(self, match):
+    def get_error_msg(self, match):
         return match[0]
