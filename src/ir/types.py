@@ -513,8 +513,7 @@ class TypeConstructor(AbstractType):
                     for i, tp in enumerate(self.type_parameters)}
         old_supertypes = self.supertypes
         type_con = perform_type_substitution(self, type_map)
-        is_func_type = True if isinstance(self, Function) else False
-        etype = ParameterizedType(t_constructor=type_con, type_args = type_args, is_func_type=is_func_type)
+        etype = ParameterizedType(t_constructor=type_con, type_args = type_args)
         etype.t_constructor.supertypes = old_supertypes
         return etype
 
@@ -581,15 +580,13 @@ def _is_type_arg_contained(t: Type, other: Type,
 class ParameterizedType(SimpleClassifier):
     def __init__(self, t_constructor: TypeConstructor,
                  type_args: List[Type],
-                 can_infer_type_args=False,
-                 is_func_type=False):
+                 can_infer_type_args=False):
         self.t_constructor = deepcopy(t_constructor)
         self.type_args = list(type_args)
         assert len(self.t_constructor.type_parameters) == len(type_args), \
             "You should provide {} types for {}".format(
                 len(self.t_constructor.type_parameters), self.t_constructor)
         self._can_infer_type_args = can_infer_type_args
-        self.is_func_type = is_func_type
         super().__init__(self.t_constructor.name,
                          self.t_constructor.supertypes)
         # XXX revisit
@@ -599,7 +596,7 @@ class ParameterizedType(SimpleClassifier):
         return True
 
     def is_function_type(self):
-        return self.t_constructor.name.startswith('Function')
+        return self.t_constructor.name.startswith('Function') or self.t_constructor.name.startswith('fn')
 
     def get_type_variable_assignments(self):
         return {
