@@ -7,7 +7,6 @@ def append_to(visit):
         self._nodes_stack.append(node)
         res = visit(self, node)
         self._nodes_stack.pop()
-        #??? handle main function here
         self._children_res.append(res)
     return inner
 
@@ -59,8 +58,8 @@ class RustTranslator(BaseTranslator):
         t_counstructor = getattr(t, 't_constructor', None)
         if not t_counstructor:
             return t.get_name()
-        if t.is_func_type:
-            return "fn(" + ", ".join([self.type_arg2str(t.type_args[ind]) for ind in (len(t.type_args) - 1)]) + ") -> " + self.type_arg2str(t.type_args[-1])
+        if t.is_function_type():
+            return "fn(" + ", ".join([self.type_arg2str(t.type_args[ind]) for ind in range(len(t.type_args) - 1)]) + ") -> " + self.type_arg2str(t.type_args[-1])
         return "{}<{}>".format(t.name, ", ".join([self.type_arg2str(t_arg) for t_arg in t.type_args]))
 
     def pop_children_res(self, children):
@@ -83,12 +82,7 @@ class RustTranslator(BaseTranslator):
         children = node.children()
         for c in children:
             c.accept(self)
-        if self.package:
-            package_str = 'package ' + self.package + '\n'
-        else:
-            package_str = ''
-        self.program = package_str + '\n\n'.join(
-            self.pop_children_res(children))
+        self.program = '\n\n'.join(self.pop_children_res(children))
 
     
     @append_to
@@ -167,6 +161,10 @@ class RustTranslator(BaseTranslator):
         return res
 
     @append_to
+    def visit_func_ref(self, node):
+        return node.func
+
+    @append_to
     def visit_func_call(self, node):
         old_indent = self.indent
         self.indent = 0
@@ -192,6 +190,8 @@ class RustTranslator(BaseTranslator):
                 else (segs[0], segs[1])
             )
             args = children_res
+        if args is None:
+            args = []
         res = "{indent}{receiver}{name}{type_args}({args})".format(
             indent=" " * self.indent,
             receiver=receiver_expr,
@@ -285,6 +285,12 @@ class RustTranslator(BaseTranslator):
             semicolon="" if self._parent_is_block() else ""
         )
 
+    #??? must be revisited
+    @append_to
+    def visit_bottom_constant(self, node):
+        bottom = "unimplemented!()"
+        return bottom
+
     @append_to
     def visit_real_constant(self, node):
         def get_cast_literal(real_type, literal):
@@ -316,9 +322,10 @@ class RustTranslator(BaseTranslator):
             semicolon="" if self._parent_is_block() else ""
         )
 
+    #for now only String type supported
     @append_to
     def visit_string_constant(self, node):
-        return "{indent}\"{literal}\"{semicolon}".format(
+        return "{indent}\"{literal}\".to_string(){semicolon}".format(
             indent=" " * self.indent,
             literal=node.literal,
             semicolon="" if self._parent_is_block() else ""
@@ -331,6 +338,18 @@ class RustTranslator(BaseTranslator):
             literal=str(node.literal),
             semicolon="" if self._parent_is_block() else ""
         )
+
+    @append_to
+    def visit_array_expr(self, node):
+        old_indent = self.indent
+        self.indent = 0
+        children = node.children()
+        for c in children:
+            c.accept(self)
+        children_res = self.pop_children_res(children)
+        self.indent = old_indent
+        res = "vec![" + ", ".join(children_res) + "]"
+        return res
     
     @append_to
     def visit_binary_op(self, node):
@@ -345,7 +364,7 @@ class RustTranslator(BaseTranslator):
             left=children_res[0],
             operator=node.operator,
             right=children_res[1],
-            semicolon=";" if self._parent_is_block() else ""
+            semicolon="" if self._parent_is_block() else ""
         )
         self.indent = old_indent
         return res
@@ -441,4 +460,8 @@ class RustTranslator(BaseTranslator):
         self._cast_number = prev_cast_number
         return res
 
+    @append_to
+    def visit_new(self, node):
+        return "unimplemented!()"
+        print("yeahhhh I'm here in new although I'm not supposed to be here")
     
