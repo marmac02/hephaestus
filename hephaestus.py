@@ -15,10 +15,12 @@ from collections import namedtuple, OrderedDict
 
 from src.args import args as cli_args, validate_args, pre_process_args
 from src import utils
+from src.compilers.rust import RustCompiler
 from src.compilers.kotlin import KotlinCompiler
 from src.compilers.groovy import GroovyCompiler
 from src.compilers.java import JavaCompiler
 from src.compilers.scala import ScalaCompiler
+from src.translators.rust import RustTranslator
 from src.translators.kotlin import KotlinTranslator
 from src.translators.groovy import GroovyTranslator
 from src.translators.scala import ScalaTranslator
@@ -31,13 +33,15 @@ TRANSLATORS = {
     'kotlin': KotlinTranslator,
     'groovy': GroovyTranslator,
     'java': JavaTranslator,
-    'scala': ScalaTranslator
+    'scala': ScalaTranslator,
+    'rust': RustTranslator
 }
 COMPILERS = {
     'kotlin': KotlinCompiler,
     'groovy': GroovyCompiler,
     'java': JavaCompiler,
-    'scala': ScalaCompiler
+    'scala': ScalaCompiler,
+    'rust': RustCompiler
 }
 STATS = {
     "Info": {
@@ -210,7 +214,45 @@ def get_batches(programs):
         return cli_args.batch
     return min(cli_args.batch, cli_args.iterations - programs)
 
+"""
+def process_cp_transformations(pid, dirname, translator, proc,
+                               program, package_name):
+    program_str = None
+    program_str_scala = None
+    translator_scala = TRANSLATORS["scala"]('src.' + package_name,
+                                                cli_args.options['Translator'])
+    while proc.can_transform():
+        res = proc.transform_program(program)
+        if res is None:
+            continue
+        program, oracle = res
+        if cli_args.keep_all:
+            # Save every program resulted by the current transformation.
+            program_str = utils.translate_program(translator, program)
+            program_str_scala = utils.translate_program(translator_scala, program)
+            save_program(
+                program,
+                utils.translate_program(translator, program),
+                os.path.join(
+                    get_transformations_dir(
+                        pid, proc.current_transformation - 1),
+                    translator.get_filename())
+            )
+    if program_str is None:
+        program_str = utils.translate_program(translator, program)
+        program_str_scala = utils.translate_program(translator_scala, program)
+    dst_file = os.path.join(dirname, package_name,
+                            translator.get_filename())
+    dst_file2 = os.path.join(cli_args.test_directory, 'tmp', str(pid),
+                             translator.get_filename())
+    save_program(program, program_str, dst_file)
+    save_program(program, program_str, dst_file2)
+    print(program_str)
+    print("\n")
+    print(program_str_scala)
+    return dst_file
 
+"""
 def process_cp_transformations(pid, dirname, translator, proc,
                                program, package_name):
     program_str = None
@@ -232,13 +274,16 @@ def process_cp_transformations(pid, dirname, translator, proc,
             )
     if program_str is None:
         program_str = utils.translate_program(translator, program)
+    program_str += "\n fn main() { }" #added for Rust CHANGE THIS
     dst_file = os.path.join(dirname, package_name,
                             translator.get_filename())
     dst_file2 = os.path.join(cli_args.test_directory, 'tmp', str(pid),
                              translator.get_filename())
     save_program(program, program_str, dst_file)
     save_program(program, program_str, dst_file2)
+    #print(program_str)
     return dst_file
+
 
 
 def process_ncp_transformations(pid, dirname, translator, proc,
@@ -294,6 +339,7 @@ def gen_program(pid, dirname, packages):
                 utils.translate_program(translator, program),
                 os.path.join(get_generator_dir(pid), translator.get_filename())
             )
+        
         correct_program = process_cp_transformations(
             pid, dirname, translator, proc, program, packages[0])
         stats = {
@@ -508,7 +554,6 @@ def _run(process_program, process_res):
 
 
 def run():
-
     def process_program(pid, dirname, packages):
         return gen_program(pid, dirname, packages)
 
@@ -529,7 +574,6 @@ def run():
     path = os.path.join(cli_args.test_directory, 'tmp')
     if os.path.exists(path):
         shutil.rmtree(path)
-    print()
     print("Total faults: " + str(STATS['totals']['failed']))
 
 
@@ -586,7 +630,6 @@ def run_parallel():
 def main():
     validate_args(cli_args)
     pre_process_args(cli_args)
-
     if cli_args.debug or cli_args.workers is None:
         run()
     else:
