@@ -51,20 +51,18 @@ class Generator():
         self._new_from_class = None
         self.namespace = ('global',)
         self.enable_pecs = not language == 'kotlin'
-        self.disable_variance_functions = language == 'kotlin'
+        self.disable_variance_functions = True #disabled for now
 
         # This flag is used for Java lambdas where local variables references
         # must be final.
         self._inside_java_lambda = False
-
+        
         self.function_type = type(self.bt_factory.get_function_type())
         self.function_types = self.bt_factory.get_function_types(
             cfg.limits.max_functional_params)
-
         self.ret_builtin_types = self.bt_factory.get_non_nothing_types()
         self.builtin_types = self.ret_builtin_types + \
             [self.bt_factory.get_void_type()]
-
         # In some case we need to use two namespaces. One for having access
         # to variables from scope, and one for adding new declarations.
         # In most cases one namespace is enough, but in cases like
@@ -85,7 +83,7 @@ class Generator():
 
     def generate(self, context=None) -> ast.Program:
         """Generate a program.
-
+        
         It first generates a number `n` top-level declarations,
         and then it generates the main function.
         """
@@ -94,6 +92,7 @@ class Generator():
                                  cfg.limits.max_top_level):
             self.gen_top_level_declaration()
         self.generate_main_func()
+        
         return ast.Program(self.context, self.language)
 
     def gen_top_level_declaration(self):
@@ -109,18 +108,19 @@ class Generator():
         NOTE that a top-level declaration can generate more top-level
         declarations.
         """
+        gen_variable_decl = self.gen_global_variable_decl if self.language == 'rust' else self.gen_variable_decl
         candidates = [
-            self.gen_variable_decl,
-            #self.gen_class_decl,
+            gen_variable_decl,
+            #self.gen_class_decl, #disabled for now
             self.gen_func_decl,
         ]
+        #candidates.extend(self.lang_obs.get_top_levl_decl())
         gen_func = ut.random.choice(candidates)
         gen_func()
 
     def generate_main_func(self) -> ast.FunctionDeclaration:
         """Generate the main function.
         """
-
         initial_namespace = self.namespace
         self.namespace += ('main', )
         initial_depth = self.depth
@@ -272,6 +272,7 @@ class Generator():
                 self._gen_func_params()
                 if (
                     ut.random.bool(prob=0.25) or
+                    self.language == 'rust' or
                     self.language == 'java' or
                     self.language == 'groovy' and is_interface
                 )
@@ -575,6 +576,7 @@ class Generator():
             fret_type: At least one method will return this type.
             signature: Generate at least one function with the given signature.
         """
+
         funcs = []
         max_funcs = cfg.limits.cls.max_funcs - 1 if fret_type \
             else cfg.limits.cls.max_funcs
@@ -722,6 +724,7 @@ class Generator():
             A list of available type parameters, and TypeVarMap for the type
             parameters of func
         """
+
         if not func.type_parameters:
             return [], {}
         substituted_type_params = {}
@@ -783,6 +786,31 @@ class Generator():
         if add_to_parent:
             self._add_node_to_parent(self.namespace, field)
         return field
+
+    #gen_global_variable_decl added for Rust
+    def gen_global_variable_decl(self) -> ast.VariableDeclaration:
+        """Generate a global Variable Declaration in Rust.
+           Global (static) variable declarations are final, 
+           and cannot contain function calls.
+           String disabled for now for str String compatibility issues
+        """
+        #exclude string type for Rust for now, and Vec type
+        available_types = [self.bt_factory.get_integer_type(),
+                           self.bt_factory.get_float_type(),
+                           self.bt_factory.get_boolean_type(),
+                           self.bt_factory.get_char_type()]
+        var_type = ut.random.choice(available_types)
+        initial_depth = self.depth
+        self.depth += 1
+        expr = self.generate_expr(var_type, True)
+        self.depth = initial_depth
+        var_decl = ast.VariableDeclaration(gu.gen_identifier('lower'),
+                                           expr=expr,
+                                           is_final=True,
+                                           var_type=var_type,
+                                           inferred_type=var_type)
+        self._add_node_to_parent(self.namespace, var_decl)
+        return var_decl
 
     def gen_variable_decl(self,
                           etype=None,
@@ -1251,8 +1279,8 @@ class Generator():
             )
         else:
             true_type, false_type, cond_type = etype, etype, etype
-        true_expr = self.generate_expr(true_type, only_leaves, subtype=False)
-        false_expr = self.generate_expr(false_type, only_leaves, subtype=False)
+        true_expr = ast.Block([self.generate_expr(true_type, only_leaves, subtype=False)], is_func_block = False) #TODO change this, enclosed in block only for Rust
+        false_expr = ast.Block([self.generate_expr(false_type, only_leaves, subtype=False)], is_func_block = False) #TODO change this, enclosed in block only for Rust
         self.depth = initial_depth
 
         # Note that this an approximation of the type of the whole conditional.
@@ -1340,7 +1368,7 @@ class Generator():
                 var.name,
                 ast.BottomConstant(var.get_type()),
                 var_type=subtype))
-        true_expr = self.generate_expr(expr_type)
+        true_expr = ast.Block(self.generate_expr(expr_type), is_func_block = False) #TODO change this, enclosed in block only for Rust  true_expr = self.generate_expr(expr_type) 
         # We pop the variable from context. Because it's no longer used.
         self.context.remove_var(self.namespace, var.name)
         extra_decls_true = [v for v in _get_extra_decls(self.namespace)
@@ -1349,8 +1377,8 @@ class Generator():
             true_expr = ast.Block(extra_decls_true + [true_expr],
                                   is_func_block=False)
         self.namespace = prev_namespace + ('false_block',)
-        false_expr = self.generate_expr(expr_type, only_leaves=only_leaves,
-                                        subtype=subtype)
+        false_expr = ast.Block([self.generate_expr(expr_type, only_leaves=only_leaves,
+                                        subtype=subtype)], is_func_block = False) #TODO change this, enclosed in block only for Rust
         extra_decls_false = [v for v in _get_extra_decls(self.namespace)
                              if v not in initial_decls]
         if extra_decls_false:
@@ -1492,6 +1520,7 @@ class Generator():
             only_leaves: do not generate new leaves except from `expr`.
             subtype: The returned type could be a subtype of `etype`.
         """
+
         log(self.logger, "Generating function call of type {}".format(etype))
         funcs = self._get_matching_function_declarations(etype, subtype)
         if not funcs:
@@ -1643,7 +1672,6 @@ class Generator():
             subtype: The type could be a subtype of `etype`.
             sam_coercion: Apply sam coercion if possible.
         """
-
         if getattr(etype, 'is_function_type', lambda: False)():
             return self._gen_func_ref_lambda(etype, only_leaves=only_leaves)
 
@@ -1862,6 +1890,7 @@ class Generator():
         Returns:
             A list of generator functions
         """
+
         def gen_variable(etype):
             return self.gen_variable(etype, only_leaves, subtype)
 
@@ -1899,7 +1928,7 @@ class Generator():
             ],
         }
         other_candidates = [
-            #lambda x: self.gen_field_access(x, only_leaves, subtype), #disabling for now
+            #lambda x: self.gen_field_access(x, only_leaves, subtype), #disabled for now
             lambda x: self.gen_conditional(x, only_leaves=only_leaves,
                                            subtype=subtype),
             lambda x: self.gen_is_expr(x, only_leaves=only_leaves,
@@ -2269,8 +2298,9 @@ class Generator():
         if (not var_decls and ret_type != self.bt_factory.get_void_type()):
             # The function does not contain any declarations and its return
             # type is not Unit. So, we can create an expression-based function.
-            body = expr if ut.random.bool(cfg.prob.function_expr) else \
-                ast.Block([expr])
+            #body = expr if ut.random.bool(cfg.prob.function_expr) else \
+             #   ast.Block([expr])
+            body = ast.Block([expr]) #TODO enclosed in block for Rust
         else:
             exprs, decls = self._gen_side_effects()
             body = ast.Block(decls + exprs + [expr])
@@ -2534,6 +2564,7 @@ class Generator():
             not_void: do not create functions that return void.
             signature: etype is a signature.
         """
+
         # Randomly choose to generate a function or a class method.
         gen_method = (
             ut.random.bool() or
