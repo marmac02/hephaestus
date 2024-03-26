@@ -63,6 +63,8 @@ class RustBuiltinFactory(bt.BuiltinFactory):
 
     def get_non_nothing_types(self):
         types = super().get_non_nothing_types()
+        if AnyType() in types:
+            types.remove(AnyType()) #might change later
         return types
 
 class RustBuiltin(tp.Builtin):
@@ -197,14 +199,14 @@ class FunctionType(tp.TypeConstructor, RustBuiltin):
     def __init__(self, nr_type_parameters: int):
         name = "fn"
         type_parameters = [tp.TypeParameter("A" + str(i), tp.Contravariant)  #was tp.Contravariant
-            for i in range(1, nr_type_parameters + 1)] + [tp.TypeParameter("R", tp.Contravariant)] #was tp.Covariant
+            for i in range(1, nr_type_parameters + 1)] + [tp.TypeParameter("R", tp.Covariant)] #was 
         self.nr_type_parameters = nr_type_parameters
         super().__init__(name, type_parameters)
         #self.supertypes.append(AnyRefType())
 
 #erase AnyType (not relevant to rust)
 class AnyType(RustBuiltin):
-    def __init__(self, name="i32"): #change this definitely
+    def __init__(self, name="ANY"): #change this definitely
         super().__init__(name)
     #handle buildin type
     def get_builtin_type(self):

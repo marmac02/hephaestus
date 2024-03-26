@@ -83,6 +83,7 @@ class RustTranslator(BaseTranslator):
         for c in children:
             c.accept(self)
         self.program = '\n\n'.join(self.pop_children_res(children))
+        self._reset_state()
 
     
     @append_to
