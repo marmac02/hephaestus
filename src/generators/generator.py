@@ -1153,7 +1153,7 @@ class Generator():
         """
         initial_depth = self.depth
         self.depth += 1
-        exclude_function_types = self.language == 'java'
+        exclude_function_types = self.language == 'java' or self.language == 'rust'
         etype = self.select_type(exclude_function_types=exclude_function_types)
         op = ut.random.choice(ast.EqualityExpr.VALID_OPERATORS[self.language])
         e1 = self.generate_expr(etype, only_leaves, subtype=False)
@@ -1218,17 +1218,33 @@ class Generator():
             self.bt_factory.get_boolean_type(): [
                 self.bt_factory.get_boolean_type()
             ],
-            self.bt_factory.get_double_type(): number_types,
-            self.bt_factory.get_big_decimal_type(): number_types,
+            self.bt_factory.get_double_type(): [
+                self.bt_factory.get_double_type()
+            ],
+            self.bt_factory.get_big_decimal_type(): [
+                self.bt_factory.get_big_decimal_type()
+            ],
             self.bt_factory.get_char_type(): [
                 self.bt_factory.get_char_type()
             ],
-            self.bt_factory.get_float_type(): number_types,
-            self.bt_factory.get_integer_type(): number_types,
-            self.bt_factory.get_big_integer_type(): number_types,
-            self.bt_factory.get_byte_type(): number_types,
-            self.bt_factory.get_short_type(): number_types,
-            self.bt_factory.get_long_type(): number_types
+            self.bt_factory.get_float_type(): [
+                self.bt_factory.get_float_type()
+            ],
+            self.bt_factory.get_integer_type(): [
+                self.bt_factory.get_integer_type(),
+            ],
+            self.bt_factory.get_big_integer_type(): [
+                self.bt_factory.get_big_integer_type()
+            ],
+            self.bt_factory.get_byte_type(): [
+                self.bt_factory.get_byte_type()
+            ],
+            self.bt_factory.get_short_type(): [
+                self.bt_factory.get_short_type()
+            ],
+            self.bt_factory.get_long_type(): [
+                self.bt_factory.get_long_type()
+            ]
         }
         initial_depth = self.depth
         self.depth += 1
