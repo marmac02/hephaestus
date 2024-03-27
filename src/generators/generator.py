@@ -56,6 +56,9 @@ class Generator():
         # This flag is used for Java lambdas where local variables references
         # must be final.
         self._inside_java_lambda = False
+
+        #This flag is used for Rust inner functions that cannot capture outer variables
+        self._inside_inner_function = False
         
         self.function_type = type(self.bt_factory.get_function_type())
         self.function_types = self.bt_factory.get_function_types(
@@ -241,6 +244,8 @@ class Generator():
 
         prev_inside_java_lamdba = self._inside_java_lambda
         self._inside_java_lambda = nested_function and self.language == "java"
+        prev_inside_inner_function = self._inside_inner_function
+        self._inside_inner_function = nested_function and self.language == "rust"
         # Type parameters of functions cannot be variant.
         # Also note that at this point, we do not allow a conflict between
         # type variable names of class and type variable names of functions.
@@ -304,6 +309,7 @@ class Generator():
         func.body = body
 
         self._inside_java_lambda = prev_inside_java_lamdba
+        self._inside_inner_function = prev_inside_inner_function
         self.depth = initial_depth
         self.namespace = initial_namespace
         return func
@@ -931,9 +937,11 @@ class Generator():
                 of `expr_type`.
         """
         # Get all non-final variables for performing the assignment.
-        variables = self._get_assignable_vars()
+        only_current_namespace = self.language == 'rust' and self._inside_inner_function
+        variables = self._get_assignable_vars(only_current_namespace)
         initial_depth = self.depth
         self.depth += 1
+        ''' commented out for now for Rust
         if not variables:
             # Ok, it's time to find a class with non-final fields,
             # generate an object of this class, and perform the assignment.
@@ -941,7 +949,8 @@ class Generator():
             if res:
                 expr_type, field = res
                 variables = [(self.generate_expr(expr_type,
-                                                 only_leaves, subtype), field)]
+                                                only_leaves, subtype), field)]
+        '''
         if not variables:
             # Nothing of the above worked, so generate a 'var' variable,
             # and perform the assignment
@@ -972,14 +981,14 @@ class Generator():
 
     # Where
 
-    def _get_assignable_vars(self) -> List[ast.Variable]:
+    def _get_assignable_vars(self, only_current_namespace) -> List[ast.Variable]:
         """Get all non-final variables in context.
 
         Note that variables inside lambdas in Java should be either final, or
         effectively final.
         """
         variables = []
-        for var in self.context.get_vars(self.namespace).values():
+        for var in self.context.get_vars(namespace=self.namespace, only_current=only_current_namespace).values():
             if self._inside_java_lambda:
                 continue
             if not getattr(var, 'is_final', True):
@@ -1103,6 +1112,9 @@ class Generator():
                 lambda v: (getattr(v, 'is_final', False) or v not in
                     self.context.get_vars(self.namespace[:-1]).values()),
                 variables))
+        if self._inside_inner_function: # Variables declared in the inner function or globals for Rust
+            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
+                        
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
         if subtype:
@@ -1944,7 +1956,7 @@ class Generator():
             ],
         }
         other_candidates = [
-            #lambda x: self.gen_field_access(x, only_leaves, subtype), #disabled for now
+            #lambda x: self.gen_field_access(x, only_leaves, subtype), #disabled for now for Rust
             lambda x: self.gen_conditional(x, only_leaves=only_leaves,
                                            subtype=subtype),
             lambda x: self.gen_is_expr(x, only_leaves=only_leaves,
