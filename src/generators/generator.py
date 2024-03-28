@@ -1841,6 +1841,11 @@ class Generator():
             if func_ref:
                 return func_ref
 
+        #DISABLING Lambdas for now for Rust!!!! Change this later
+        func_ref = self._gen_func_ref(etype, only_leaves=only_leaves)
+        if func_ref:
+            return func_ref
+
         # Generate Lambda
         ret_type, params = self._gen_ret_and_paramas_from_sig(etype, True)
         return self.gen_lambda(etype=ret_type, params=params,
