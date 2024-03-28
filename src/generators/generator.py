@@ -1642,6 +1642,8 @@ class Generator():
                 lambda v: (getattr(v, 'is_final', False) or (
                     v not in self.context.get_vars(self.namespace[:-1]).values())),
                 variables))
+        if self._inside_inner_function: # function references only in current scope for Rust
+            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())
         for var in variables:
             var_type = var.get_type()
             if not getattr(var_type, 'is_function_type', lambda: False)():
