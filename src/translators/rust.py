@@ -350,6 +350,11 @@ class RustTranslator(BaseTranslator):
         children_res = self.pop_children_res(children)
         self.indent = old_indent
         res = "vec![" + ", ".join(children_res) + "]"
+
+        #temporary `fix` to handle empty vec![] change this
+        if len(children_res) == 0 and self._parent_is_block():
+            res = "unimplemented!()"
+        
         return res
     
     @append_to
