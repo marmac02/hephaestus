@@ -143,6 +143,11 @@ class RustTranslator(BaseTranslator):
         len_params = len(node.params)
         len_type_params = len(node.type_parameters)
         type_parameters_res = ", ".join(children_res[len_params:len_type_params + len_params])
+
+        #type params implement Copy trait to avoid move issues CHANGE THIS
+        #type_parameters_res = " :Copy, ".join(children_res[len_params:len_type_params + len_params])
+        #type_parameters_res += " :Copy" if type_parameters_res else ""
+
         body_res = children_res[-1] if node.body else ""
         prefix = " " * old_indent
         type_params = "<" + type_parameters_res + ">" if type_parameters_res else ""
@@ -179,6 +184,7 @@ class RustTranslator(BaseTranslator):
             if not node.can_infer_type_args and node.type_args
             else ""
         )
+        #type_args = "" #DISABLING TYPE ARGS CHANGE THIS
         segs = node.func.rsplit(".", 1)
         if node.receiver:
             receiver_expr = children_res[0] + '.'
