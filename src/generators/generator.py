@@ -1189,7 +1189,7 @@ class Generator():
         initial_depth = self.depth
         self.depth += 1
         exclude_function_types = self.language == 'java' or self.language == 'rust'
-        etype = self.select_type(exclude_function_types=exclude_function_types)
+        etype = self.select_type(exclude_function_types=exclude_function_types, exclude_type_vars=True)
         op = ut.random.choice(ast.EqualityExpr.VALID_OPERATORS[self.language])
         e1 = self.generate_expr(etype, only_leaves, subtype=False)
         e2 = self.generate_expr(etype, only_leaves, subtype=False)
