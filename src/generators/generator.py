@@ -2656,6 +2656,8 @@ class Generator():
                 func_type_var_map = tu.instantiate_parameterized_function(
                     func.type_parameters, self.get_types(),
                     only_regular=True, type_var_map={})
+                #if func.get_type().is_parameterized():
+                func_type_var_map[func.get_type()] = etype #hardcoded parameterized return type for Rust, if-statement above didn't work
             msg = "Generating a method {} of type {}; TypeVarMap {}".format(
                 func.name, etype, func_type_var_map)
             log(self.logger, msg)
