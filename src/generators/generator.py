@@ -271,7 +271,7 @@ class Generator():
         # Also note that at this point, we do not allow a conflict between
         # type variable names of class and type variable names of functions.
         # TODO consider being less conservative.
-        if not nested_function:
+        if (not nested_function): #or (nested_function and self.language == 'rust'): #nested functions in Rust can be parameterized
             if type_params is not None:
                 for t_p in type_params:
                     # We add the types to the context.
@@ -754,7 +754,6 @@ class Generator():
             A list of available type parameters, and TypeVarMap for the type
             parameters of func
         """
-
         if not func.type_parameters:
             return [], {}
         substituted_type_params = {}
@@ -2359,7 +2358,7 @@ class Generator():
             # type is not Unit. So, we can create an expression-based function.
             #body = expr if ut.random.bool(cfg.prob.function_expr) else \
              #   ast.Block([expr])
-            body = ast.Block([expr]) #TODO enclosed in block for Rust
+            body = ast.Block([expr]) #enclosed in block for Rust
         else:
             exprs, decls = self._gen_side_effects()
             body = ast.Block(decls + exprs + [expr])
@@ -2623,7 +2622,6 @@ class Generator():
             not_void: do not create functions that return void.
             signature: etype is a signature.
         """
-
         # Randomly choose to generate a function or a class method.
         gen_method = (
             ut.random.bool() or
