@@ -188,6 +188,27 @@ class Generator():
             if t_param.bound:
                 t_param.bound = tp.substitute_type(t_param.bound, replaced)
 
+    def _add_used_type_params(self, type_params, params, ret_type):
+        """
+        Add function's type parameters that are included in its signature.
+        """
+        def get_type_vars(t):
+            if t.is_type_var():
+                return [t]
+            return getattr(t, "get_type_variables", lambda x: [])(
+                self.bt_factory
+            )
+        
+        all_type_vars = []
+        param_types = [p.get_type() for p in params]
+        for t in param_types + [ret_type]:
+            all_type_vars.extend(get_type_vars(t))
+        for t_param in all_type_vars:
+            if t_param not in type_params:
+                type_params.append(t_param)
+        return type_params
+
+
     def gen_func_decl(self,
                       etype:tp.Type=None,
                       not_void=False,
@@ -307,6 +328,9 @@ class Generator():
         if func.body is not None:
             body = self._gen_func_body(ret_type)
         func.body = body
+
+        #extend type parameters with ones used in the signature (necessary for Rust)
+        func.type_parameters = self._add_used_type_params(type_params, params, ret_type)
 
         self._inside_java_lambda = prev_inside_java_lamdba
         self._inside_inner_function = prev_inside_inner_function
