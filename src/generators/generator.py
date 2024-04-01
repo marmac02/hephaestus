@@ -2056,7 +2056,10 @@ class Generator():
         ]
         type_params = []
         if not exclude_type_vars:
-            for t_param in self.context.get_types(self.namespace).values():
+            t_params = self.context.get_types(namespace=self.namespace, only_current=True) \
+                if self._inside_inner_function and self.language == 'rust' else self.context.get_types(self.namespace)
+            #t_params = self.context.get_types(self.namespace)
+            for t_param in t_params.values():
                 variance = getattr(t_param, 'variance', None)
                 if exclude_covariants and variance == tp.Covariant:
                     continue
@@ -2084,6 +2087,7 @@ class Generator():
                     exclude_arrays=False,
                     exclude_covariants=False,
                     exclude_contravariants=False,
+                    exclude_type_vars=False,
                     exclude_function_types=False) -> tp.Type:
         """Select a type from the all available types.
 
@@ -2105,6 +2109,7 @@ class Generator():
                                exclude_arrays=exclude_arrays,
                                exclude_covariants=exclude_covariants,
                                exclude_contravariants=exclude_contravariants,
+                               exclude_type_vars=exclude_type_vars,
                                exclude_function_types=exclude_function_types)
         stype = ut.random.choice(types)
         if stype.is_type_constructor():
