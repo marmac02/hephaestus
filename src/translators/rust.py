@@ -184,7 +184,6 @@ class RustTranslator(BaseTranslator):
             if not node.can_infer_type_args and node.type_args
             else ""
         )
-        #type_args = "" #DISABLING TYPE ARGS CHANGE THIS
         segs = node.func.rsplit(".", 1)
         if node.receiver:
             receiver_expr = children_res[0] + '.'
@@ -475,5 +474,151 @@ class RustTranslator(BaseTranslator):
     @append_to
     def visit_new(self, node):
         return "unimplemented!()"
-        print("yeahhhh I'm here in new although I'm not supposed to be here")
     
+    @append_to
+    def visit_supertrait_instantiation(self, node):
+        return self.get_type_name(node.trait_type)
+    
+    @append_to
+    def visit_trait_decl(self, node):
+        old_indent = self.indent
+        self.indent += 2
+        children = node.children()
+        for c in children:
+            c.accept(self)
+        children_res = self.pop_children_res(children)
+        function_signs_res = [children_res[i] for i, _ in enumerate(node.function_signatures)]
+        len_function_signs = len(node.function_signatures)
+        default_impls_res = [children_res[i + len_function_signs] 
+                             for i, _ in enumerate(node.default_impls)]
+        len_default_impls = len(node.default_impls)
+        supertraits_res = [children_res[i + len_function_signs + len_default_impls] 
+                           for i, _ in enumerate(node.supertraits)]
+        len_supertraits = len(node.supertraits)
+        type_parameters_res = [children_res[i + len_function_signs + len_default_impls + len_supertraits]
+                               for i, _ in enumerate(node.type_parameters)]
+        res = "{indent}trait {name}".format(
+            indent=" " * old_indent,
+            name=node.name
+        )
+        if type_parameters_res:
+            res += "<" + ", ".join(type_parameters_res) + ">"
+        if supertraits_res:
+            res += " : " + " + ".join(supertraits_res)
+        res += " {\n"
+        if function_signs_res:
+            res += ";\n".join(function_signs_res)
+            res += ";\n"
+        if default_impls_res:
+            res += "\n".join(default_impls_res)
+            res += "\n"
+        res += " " * old_indent + "}"
+        self.indent = old_indent
+        return res
+
+    @append_to
+    def visit_struct_decl(self, node):
+        old_indent = self.indent
+        self.indent += 2
+        children = node.children()
+        for c in children:
+            c.accept(self)
+        children_res = self.pop_children_res(children)
+        fields_res = [children_res[i] for i, _ in enumerate(node.fields)]
+        len_fields = len(node.fields)
+        type_parameters_res = [children_res[i + len_fields] for i, _ in enumerate(node.type_parameters)]
+        res = "{indent}struct {name}".format(
+            indent=" "*old_indent,
+            name=node.name,
+        )
+        if type_parameters_res:
+            res += "<" + ", ".join(type_parameters_res) + ">"
+        res += " {\n"
+        if fields_res:
+            res += ",\n".join(fields_res)
+            res += ",\n"
+        res += " "*old_indent + "}"
+        self.indent = old_indent
+        return res
+
+    @append_to
+    def visit_field_decl(self, node):
+        return "{indent}{name}: {type}".format(
+            indent=" "*self.indent,
+            name=node.name,
+            type=self.get_type_name(node.field_type)
+        )
+
+    @append_to
+    def visit_struct_instantiation(self, node):
+        old_indent = self.indent
+        self.indent = 0
+        children = node.children()
+        for c in children:
+            c.accept(self)
+        self.indent = old_indent
+        children_res = self.pop_children_res(children)
+        type_args = (
+            "::<" + ", ".join([self.get_type_name(t) for t in node.type_args]) + ">"
+            if not node.can_infer_type_args and node.type_args
+            else ""
+        )
+        field_names = node.struct.get_field_names() #this must be implemented for struct type
+        res = "{indent}{name}{type_args} { ".format(
+            indent=" "*self.indent,
+            name=node.struct.name,
+            type_args=type_args
+        )
+        for ind, field_name in enumerate(field_names):
+            res += field_name + ": " + children_res[ind] + ", "
+        res += "}"
+        return res
+
+    @append_to
+    def visit_field_access(self, node):
+        old_indent = self.indent
+        self.indent = 0
+        children = node.children()
+        for c in children:
+            c.accept(self)
+        children_res = self.pop_children_res(children)
+        self.indent = old_indent
+        if children:
+            receiver_expr = (
+                '({}).'.format(children_res[0])
+                if isinstance(node.expr, ast.BottomConstant)
+                else children_res[0] + '.'
+            )
+        else:
+            receiver_expr = ''
+        res = "{indent}{receiver}{name}".format(
+            indent=" " * old_indent,
+            receiver=receiver_expr,
+            name=node.field
+        )
+        self.indent = old_indent
+        return res
+    
+    @append_to
+    def visit_trait_impl(self, node):
+        old_indent = self.indent
+        self.indent += 2
+        children = node.children()
+        for c in children:
+            c.accept(self)
+        children_res = self.pop_children_res(children)
+        functions_res = [children_res[i] for i, _ in enumerate(node.functions)]
+        len_functions = len(node.functions)
+        type_parameters_res = [children_res[i + len_functions] for i, _ in enumerate(node.type_parameters)]
+        res = "{indent}impl{params} {trait} for {struct} {\n".format(
+            indent = " "*old_indent,
+            params = "<" + ", ".join(type_parameters_res) + ">" if type_parameters_res else "",
+            trait = self.get_type_name(node.trait), #??? check if correct
+            struct = self.get_type_name(node.struct) #??? check if correct
+        )
+        if functions_res:
+            res += "\n".join(functions_res)
+            res += "\n"
+        res += " "*old_indent + "}"
+        self.indent = old_indent
+        return res
