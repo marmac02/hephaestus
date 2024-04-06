@@ -2,6 +2,7 @@ from src.ir.types import Builtin
 
 import src.ir.builtins as bt
 import src.ir.types as tp
+from typing import List
 
 #tempoprary types to fit with generator
 
@@ -220,6 +221,22 @@ class AnyRefType(AnyType):
 
 class TupleType(tp.TypeConstructor, RustBuiltin):
     pass
+
+class StructType(tp.SimpleClassifier):
+    def __init__(self, name, field_names: List[str], field_types: List[tp.Type]):
+        self.name = name
+        self.field_names = field_names
+        self.field_types = field_types
+
+    def get_field_names(self):
+        return self.field_names
+
+    def get_field_types(self):
+        return self.field_types
+
+class TraitType(tp.AbstractType): #maybe change this
+    def __init__(self, name):
+        self.name = name
 
 
 Unit = UnitType()
