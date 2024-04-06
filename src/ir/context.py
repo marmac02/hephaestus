@@ -20,6 +20,8 @@ class Context():
                 'funcs': {},
                 'lambdas': {},
                 'vars': {},
+                'structs': {},
+                'traits': {},
                 'classes': {},
                 'decls': OrderedDict()  # Here we keep the declaration order
             }
@@ -53,6 +55,14 @@ class Context():
         self._add_entity(namespace, 'classes', class_name, cls)
         self._add_entity(namespace, 'decls', class_name, cls)
 
+    def add_struct(self, namespace, struct_name, struct):
+        self._add_entity(namespace, 'structs', struct_name, struct)
+        self._add_entity(namespace, 'decls', struct_name, struct)
+
+    def add_trait(self, namespace, trait_name, trait):
+        self._add_entity(namespace, 'traits', trait_name, trait)
+        self._add_entity(namespace, 'decls', trait_name, trait)
+
     def remove_type(self, namespace, type_name):
         self._remove_entity(namespace, 'types', type_name)
 
@@ -70,6 +80,14 @@ class Context():
     def remove_class(self, namespace, class_name):
         self._remove_entity(namespace, 'classes', class_name)
         self._remove_entity(namespace, 'decls', class_name)
+
+    def remove_struct(self, namespace, struct_name):
+        self._remove_entity(namespace, 'structs', struct_name)
+        self._remove_entity(namespace, 'decls', struct_name)
+
+    def remove_trait(self, namespace, trait_name):
+        self._remove_entity(namespace, 'traits', trait_name)
+        self._remove_entity(namespace, 'decls', trait_name)
 
     def _get_declarations_glob(self, namespace, decl_type):
         decls = OrderedDict({})
@@ -152,6 +170,12 @@ class Context():
 
     def get_classes(self, namespace, only_current=False, glob=False, none=False):
         return self._get_declarations(namespace, 'classes', only_current, glob, none)
+
+    def get_structs(self, namespace, only_current=False, glob=False, none=False):
+        return self._get_declarations(namespace, 'structs', only_current, glob, none)
+
+    def get_traits(self, namespace, only_current=False, glob=False, none=False):
+        return self._get_declarations(namespace, 'traits', only_current, glob, none)
 
     def get_declarations(self, namespace, only_current=False, glob=False, none=False):
         return self._get_declarations(namespace, 'decls', only_current, glob, none)
