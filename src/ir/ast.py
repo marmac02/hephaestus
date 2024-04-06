@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import src.ir.type_utils as tu
 import src.ir.types as types
+import src.ir.rust_types as rust_types
 from src import utils
 from src.ir import BUILTIN_FACTORIES
 from src.ir.builtins import BuiltinFactory, FunctionType
@@ -104,6 +105,8 @@ class Program(Node):
             FunctionDeclaration: self.context.add_func,
             ClassDeclaration: self.context.add_class,
             VariableDeclaration: self.context.add_var,
+            StructDeclaration: self.context.add_struct,
+            TraitDeclaration: self.context.add_trait,
         }
         decl_types[decl.__class__](GLOBAL_NAMESPACE, decl.name, decl)
         if isinstance(decl, ClassDeclaration):
@@ -1401,4 +1404,198 @@ class Assignment(Expr):
             return (self.name == other.name and
                     self.expr.is_equal(other.expr) and
                     check_default_eq(self.receiver, other.receiver))
+        return False
+
+
+class SuperTraitInstantiation(Node):
+    def __init__(self, trait_type: rust_types.TraitType):
+        self.trait_type = trait_type
+
+    def children(self):
+        return []
+
+    def update_children(self, children):
+        pass
+
+    def __str__(self):
+        return self.trait_type.name
+
+    def is_equal(self, other):
+        if isinstance(other, SuperTraitInstantiation):
+            return self.trait_type == other.trait_type
+        return False
+
+
+
+class TraitDeclaration(Declaration):
+    def __init__(self, 
+                 name: str, 
+                 function_signatures: List[FunctionDeclaration] = [],
+                 default_impls: List[FunctionDeclaration] = [],
+                 supertraits: List[SuperTraitInstantiation] = [],
+                 structs_that_impl: List[rust_types.StructType] = [],
+                 type_parameters: List[types.TypeParameter] = []
+                 ):
+        self.name = name
+        self.function_signatures = function_signatures
+        self.default_impls = default_impls
+        self.supertraits = supertraits
+        self.structs_that_impl = structs_that_impl  
+        self.type_parameters = type_parameters
+    
+    @property
+    def attributes(self):
+        return self.function_signatures + self.default_impls
+    
+    def children(self):
+        return self.function_signatures + self.default_impls + self.supertraits + self.type_parameters
+
+    def update_children(self, children):
+        def get_lst(start, end):
+            return children[start:end]
+
+        super().update_children(children)
+        len_func_signatures = len(self.function_signatures)
+        len_default_impls = len(self.default_impls)
+        len_supertraits = len(self.supertraits)
+        len_tp = len(self.type_parameters)
+        function_signs = get_lst(0, len_func_signatures)
+        for i, c in enumerate(function_signs):
+            self.function_signatures[i] = c
+        default_impls = get_lst(len_func_signatures, len_func_signatures + len_default_impls)
+        for i, c in enumerate(default_impls):
+            self.default_impls[i] = c
+        supertraits = get_lst(len_func_signatures + len_default_impls, len_func_signatures + len_default_impls + len_supertraits)
+        for i, c in enumerate(supertraits):
+            self.supertraits[i] = c
+        type_params = get_lst(len_func_signatures + len_default_impls + len_supertraits, len_func_signatures + len_default_impls + len_supertraits + len_tp)
+        for i, c in enumerate(type_params):
+            self.type_parameters[i] = c
+
+    def get_type(self):
+        return types.Trait(self.name) #update when trait Type defined
+
+    def __str__(self):
+        return "trait {} {{\n  {} }}".format(
+            self.name, "\n  ".join(map(str, self.function_signatures))) #fix this when ast.trait ready 
+
+    def is_equal(self, other):
+        if isinstance(other, TraitDeclaration):
+            return (self.name == other.name and
+                    check_list_eq(self.function_signatures, other.function_signatures) and
+                    check_list_eq(self.default_impls, other.default_impls) and
+                    check_list_eq(self.supertraits, other.supertraits) and
+                    check_list_eq(self.type_parameters, other.type_parameters))
+        return False
+
+
+class StructDeclaration(Declaration):
+    def __init__(self, 
+                 name: str,
+                 fields: List[FieldDeclaration] = [],
+                 impl_traits: List[rust_types.TraitType] = [],
+                 type_parameters: List[types.TypeParameter] = []):
+        self.name = name
+        self.fields = fields
+        self.impl_traits = impl_traits
+        self.type_parameters = type_parameters
+
+    @property
+    def attributes(self):
+        return self.fields
+
+    def children(self):
+        return self.fields + self.type_parameters
+
+    def update_children(self, children):
+        def get_lst(start, end):
+            return children[start:end]
+
+        super().update_children(children)
+        len_fields = len(self.fields)
+        len_tp = len(self.type_parameters)
+        fields = get_lst(0, len_fields)
+        for i, c in enumerate(fields):
+            self.fields[i] = c
+        type_params = get_lst(len_fields, len_fields + len_tp)
+        for i, c in enumerate(type_params):
+            self.type_parameters[i] = c
+
+    def get_type(self):
+        return types.Struct(self.name) #revisit when struct type defined
+
+    def get_field(self, field_name):
+        for f in self.fields:
+            if f.name == field_name:
+                return f
+        return None
+    
+
+class StructInstantiation(Expr):
+    def __init__(self, struct: rust_types.StructType, field_exprs: List[Expr]):
+        self.struct = struct
+        self.field_exprs = field_exprs
+
+    def children(self):
+        return self.field_exprs
+
+    def update_children(self, children):
+        super().update_children(children)
+        self.field_exprs = children
+
+    def __str__(self):
+        pass #TODO
+
+    def is_equal(self, other):
+        if isinstance(other, StructInstantiation):
+            return (self.struct == other.struct and 
+                    check_list_eq(self.field_exprs, other.field_exprs))
+
+
+class TraitImpl(Declaration):
+    def __init__(self, 
+                 struct: rust_types.StructType, 
+                 trait: rust_types.TraitType,
+                 functions: List[FunctionDeclaration] = [],
+                 type_parameters: List[types.TypeParameter] = []):
+        self.name = name
+        self.struct = struct
+        self.trait = trait
+        self.functions = functions
+        self.type_parameters = type_parameters
+
+    @property
+    def attributes(self):
+        return self.functions
+
+    def children(self):
+        return self.functions + self.type_parameters
+
+    def update_children(self, children):
+        def get_lst(start, end):
+            return children[start:end]
+        
+
+        super().update_children(children)
+        len_functions = len(self.functions)
+        len_tp = len(self.type_parameters)
+        functions = get_lst(0, len_functions)
+        for i, c in enumerate(functions):
+            self.functions[i] = c
+        type_parameters = get_lst(len_functions, len_functions + len_tp)
+        for i, c in enumerate(type_parameters):
+            self.type_parameters[i] = c
+
+    def get_type(self):
+        return types.TraitImpl(self.name, self.struct, self.trait) #revisit, should it even have a type?
+
+    def __str__(self):
+        return "impl {} for {} {{\n  {} }}".format(
+            self.trait, self.name, "\n  ".join(map(str, self.functions)))
+
+    def is_equal(self, other):
+        if isinstance(other, TraitImpl):
+            return (self.name == other.name and
+                    self.trait == other.trait and
+                    check_list_eq(self.functions, other.functions))
         return False
