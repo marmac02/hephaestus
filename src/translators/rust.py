@@ -1,5 +1,6 @@
 from src.ir import ast, rust_types as rt, types as tp
 from src.translators.base import BaseTranslator
+from src.ir.context import get_decl
 
 #modify maybe
 def append_to(visit):
@@ -26,6 +27,7 @@ class RustTranslator(BaseTranslator):
         self.is_unit = False
         self.is_lambda = False
         self._nodes_stack = []
+        self.context = None
 
     def _reset_state(self):
         self._children_res = []
@@ -37,6 +39,7 @@ class RustTranslator(BaseTranslator):
         self.is_unit = False
         self.is_lambda = False
         self._nodes_stack = []
+        self.context = None
 
     @staticmethod
     def get_filename():
@@ -76,6 +79,14 @@ class RustTranslator(BaseTranslator):
     #??? might be wrong
     def _is_global_scope(self):
         return len(self._nodes_stack) == 1
+
+    def _is_func_in_trait(self, func_name):
+        funcs = self.context.get_all_func_decl()
+        #assert func_name in funcs.keys(), "Function not found in context"
+        if not func_name in funcs.keys():
+            #if function is not found then it is probably a variable of function type
+            return False
+        return funcs[func_name].trait_func
 
     def visit_program(self, node):
         self.context = node.context
@@ -143,6 +154,8 @@ class RustTranslator(BaseTranslator):
         len_params = len(node.params)
         len_type_params = len(node.type_parameters)
         type_parameters_res = ", ".join(children_res[len_params:len_type_params + len_params])
+        if self._is_func_in_trait(node.name):
+            param_res = ["&self"] + param_res
 
         #type params implement Copy trait to avoid move issues CHANGE THIS
         #type_parameters_res = " :Copy, ".join(children_res[len_params:len_type_params + len_params])
@@ -163,12 +176,18 @@ class RustTranslator(BaseTranslator):
     @append_to
     def visit_param_decl(self, node):
         param_type = node.param_type
-        res = node.name + ": " + self.get_type_name(param_type) #??? handle vararg 
+        if param_type is None: #parameter is self
+            res = "&self"
+        else:
+            res = node.name + ": " + self.get_type_name(param_type) #??? handle vararg 
         return res
 
     @append_to
     def visit_func_ref(self, node):
-        return node.func
+        receiver = "self." if self._is_func_in_trait(node.func) else ""
+        res = "{receiver}{name}".format(receiver=receiver, name=node.func)
+        return res 
+
 
     @append_to
     def visit_func_call(self, node):
@@ -196,6 +215,8 @@ class RustTranslator(BaseTranslator):
                 else (segs[0], segs[1])
             )
             args = children_res
+        if receiver_expr == "" and self._is_func_in_trait(node.func):
+            receiver_expr = "self."
         if args is None:
             args = []
         res = "{indent}{receiver}{name}{type_args}({args})".format(

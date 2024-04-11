@@ -59,6 +59,9 @@ class Generator():
 
         #This flag is used for Rust inner functions that cannot capture outer variables
         self._inside_inner_function = False
+
+        #This flag is used for Rust to handle function calls in inner functions inside trait declarations
+        self._inside_trait_decl = False
         
         self.function_type = type(self.bt_factory.get_function_type())
         self.function_types = self.bt_factory.get_function_types(
@@ -81,6 +84,8 @@ class Generator():
         # classes or using them as supertypes, because we do not have the
         # complete information about them.
         self._blacklisted_classes: set = set()
+        self._blacklisted_traits: set = set() #for Rust
+        self._blacklisted_structs: set = set() #for Rust
 
     ### Entry Point Generators ###
 
@@ -116,6 +121,8 @@ class Generator():
             gen_variable_decl,
             #self.gen_class_decl, #disabled for now
             self.gen_func_decl,
+            self.gen_struct_decl,
+            self.gen_trait_decl,
         ]
         #candidates.extend(self.lang_obs.get_top_levl_decl())
         gen_func = ut.random.choice(candidates)
@@ -217,6 +224,7 @@ class Generator():
                       params:List[ast.ParameterDeclaration]=None,
                       abstract=False,
                       is_interface=False,
+                      trait_func=False,
                       type_params:List[tp.TypeParameter]=None,
                       namespace=None) -> ast.FunctionDeclaration:
         """Generate a function declaration.
@@ -256,6 +264,7 @@ class Generator():
                         self.namespace[-2][0].isupper())
         can_override = abstract or is_interface or (class_method and not
                                     class_is_final and ut.random.bool())
+        trait_func = self.namespace[-2][0].isupper() #check if function is declared in a trait
         # Check if this function we want to generate is a nested functions.
         # To do so, we want to find if the function is directly inside the
         # namespace of another function.
@@ -271,7 +280,7 @@ class Generator():
         # Also note that at this point, we do not allow a conflict between
         # type variable names of class and type variable names of functions.
         # TODO consider being less conservative.
-        if (not nested_function): #or (nested_function and self.language == 'rust'): #nested functions in Rust can be parameterized
+        if (not nested_function and not trait_func): #or (nested_function and self.language == 'rust'): #nested functions in Rust can be parameterized
             if type_params is not None:
                 for t_p in type_params:
                     # We add the types to the context.
@@ -312,6 +321,8 @@ class Generator():
             # a temporary body as a placeholder.
             body = ast.BottomConstant(ret_type)
         self._remove_unused_type_params(type_params, params, ret_type)
+        #if trait_func:
+        #    params = [ast.SelfParameter()] + params #adding &self parameter for Rust trait functions
         func = ast.FunctionDeclaration(
             func_name, params, ret_type, body,
             func_type=(ast.FunctionDeclaration.CLASS_METHOD
@@ -320,6 +331,7 @@ class Generator():
             is_final=not can_override,
             inferred_type=None,
             type_parameters=type_params,
+            trait_func=trait_func,
         )
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:
@@ -565,6 +577,21 @@ class Generator():
         assert False, ('Trying to put a node in class other than a function',
                        ' and a field')
 
+    def _add_node_to_struct(self, struct, node):
+        if isinstance(node, ast.FieldDeclaration):
+            struct.fields.append(node)
+            return
+        assert False, ('Trying to put a node in struct other than a field')
+
+    def _add_node_to_trait(self, trait, node):
+        if isinstance(node, ast.FunctionDeclaration):
+            if node.body is None:
+                trait.function_signatures.append(node)
+            else:
+                trait.default_impls.append(node)
+        #print(node)
+        #assert False, ('Trying to put a node in trait other than a function')
+
     def _add_node_to_parent(self, parent_namespace, node):
         node_type = {
             ast.FunctionDeclaration: self.context.add_func,
@@ -573,16 +600,30 @@ class Generator():
             ast.FieldDeclaration: self.context.add_var,
             ast.ParameterDeclaration: self.context.add_var,
             ast.Lambda: self.context.add_lambda,
+            ast.TraitDeclaration: self.context.add_trait,
+            ast.StructDeclaration: self.context.add_struct,
         }
         if parent_namespace == ast.GLOBAL_NAMESPACE:
             node_type[type(node)](parent_namespace, node.name, node)
             return
         parent = self.context.get_decl(parent_namespace[:-1],
                                        parent_namespace[-1])
-        if parent and isinstance(parent, ast.ClassDeclaration):
-            self._add_node_to_class(parent, node)
+        if parent:
+            if isinstance(parent, ast.ClassDeclaration):
+                self._add_node_to_class(parent, node)
+            if isinstance(parent, ast.StructDeclaration):
+                self._add_node_to_struct(parent, node)
+            if isinstance(parent, ast.TraitDeclaration):
+                self._add_node_to_trait(parent, node)
 
         node_type[type(node)](parent_namespace, node.name, node)
+
+
+    def _add_node_to_struct(self, parent, node):
+        if isinstance(node, ast.FieldDeclaration):
+            parent.fields.append(node)
+            return
+        assert False, ('Trying to put a node in struct other than a field')
 
 
     # And
@@ -1638,8 +1679,9 @@ class Generator():
                 for t_param in func.type_parameters
             ]
         )
+        trait_func = getattr(func, 'trait_func', True)
         return ast.FunctionCall(func.name, args, receiver,
-                                type_args=type_args)
+                                type_args=type_args, trait_func=trait_func)
 
     # Where
 
@@ -1702,6 +1744,7 @@ class Generator():
                                      gen_bottom=gen_bottom, sam_coercion=False)
             args.append(ast.CallArgument(arg))
         self.depth = initial_depth
+        function_ast = self.context.get_decl(self.namespace, name)
         return ast.FunctionCall(name, args, receiver=receiver,
                                 is_ref_call=True)
 
@@ -1994,6 +2037,11 @@ class Generator():
             gen_fun_call,
             gen_variable
         ]
+
+        if len(self.namespace) > 3 and self.namespace[1][0].isupper() and self.namespace[-2][0].islower():
+            other_candidates.remove(gen_fun_call) #MAYBE it works???
+            if expr_type == self.bt_factory.get_void_type():
+                return [lambda x: ast.BottomConstant(x)]
 
         if expr_type == self.bt_factory.get_void_type():
             # The assignment operator in Java evaluates to the assigned value.
@@ -3017,3 +3065,119 @@ class Generator():
             type_param.variance = tp.Invariant
             type_var_map[type_var] = type_param
         return type_params, type_var_map, can_wildcard
+
+
+
+
+    def gen_struct_decl(self,
+                        struct_name: str=None,
+                        field_type: tp.Type=None,
+                        type_params: List[tp.TypeParameter]=None,
+                        ) -> ast.StructDeclaration:
+        """Generate a struct declaration.
+        Args:
+        field_type: At least one field will have this type.
+        type_params: List with type parameters.
+
+        Returns: A struct declaration node.
+        """
+        struct_name = struct_name or gu.gen_identifier('capitalize')
+        initial_namespace = self.namespace
+        self.namespace += (struct_name,)
+        initial_depth = self.depth
+        self.depth += 1
+        type_params = [] #parameterization of structs disabled for now
+        struct = ast.StructDeclaration(
+            name=struct_name,
+            fields=[],
+            impl_traits=[],
+            type_parameters=type_params,
+        )
+        self._add_node_to_parent(ast.GLOBAL_NAMESPACE, struct)
+        self._blacklisted_structs.add(struct_name)
+        self.gen_struct_fields(field_type) #fields added to fields list in _add_node_to_parent call of gen_field_decl
+        self._blacklisted_structs.remove(struct_name)
+        self.namespace = initial_namespace
+        self.depth = initial_depth
+        return struct
+
+
+    def gen_struct_fields(self, field_type: tp.Type=None):
+        max_fields = cfg.limits.cls.max_fields - 1 if field_type else cfg.limits.cls.max_fields
+        fields = []
+        if field_type:
+            fields.append(self.gen_field_decl(field_type, True))
+        for _ in range(ut.random.integer(0, max_fields)):
+            fields.append(self.gen_field_decl(None, True))
+        return fields
+    
+    def gen_trait_decl(self, 
+                       fret_type: tp.Type=None,
+                       not_void: bool=False,
+                       trait_name: str=None,
+                       signature: tp.ParameterizedType=None
+                       ) -> ast.TraitDeclaration:
+        """Generate a trait declaration."""
+        self._inside_trait_decl = True
+        trait_name = trait_name or gu.gen_identifier('capitalize')
+        initial_namespace = self.namespace
+        self.namespace += (trait_name,)
+        initial_depth = self.depth
+        self.depth += 1
+        trait = ast.TraitDeclaration(
+            name=trait_name,
+            function_signatures=[],
+            default_impls=[],
+            supertraits=[],
+            structs_that_impl=[],
+            type_parameters=[],
+        )
+        self._add_node_to_parent(ast.GLOBAL_NAMESPACE, trait)
+        self._blacklisted_traits.add(trait_name)
+        supertrait = self._select_supertrait()
+        if supertrait:
+            trait.supertraits.extend(supertrait)
+        self.gen_trait_functions(fret_type=fret_type, not_void=not_void, signature=signature, only_signatures=True)
+        #self.gen_func_decl(fret_type, not_void=not_void, is_interface=False, trait_func=True)
+        self._inside_trait_decl = False
+        return trait
+
+
+    def _select_supertrait(self):
+        """Select a supertrait for a trait.
+           For now up to one supertrait is selected.
+        """
+        current_trait = self.namespace[-1]
+        trait_decls = [
+            t for t in self.context.get_traits(self.namespace).values()
+            if t.name != current_trait and t.name not in self._blacklisted_traits
+        ]
+        if not trait_decls:
+            return None
+        trait_decl = ut.random.choice(trait_decls)
+        if ut.random.bool():
+            return [trait_decl]
+        else:
+            return None
+
+    def gen_trait_functions(self,
+                            fret_type=None,
+                            not_void=False,
+                            signature: tp.ParameterizedType=None,
+                            only_signatures=False) -> List[ast.FunctionDeclaration]:
+        """ Generate trait signatures and default implementations.
+        """
+        funcs = []
+        max_funcs = cfg.limits.cls.max_funcs - 1 if fret_type else cfg.limits.cls.max_funcs
+        if fret_type:
+            func = self.gen_func_decl(fret_type, not_void=not_void, is_interface=only_signatures, trait_func=True)
+            funcs.append(func)
+        if signature:
+            ret_type, params = self._gen_ret_and_paramas_from_sig(signature)
+            func = self.gen_func_decl(ret_type, params=params, not_void=not_void, is_interface=only_signatures, trait_func=True)
+            func.trait_func = True
+            funcs.append(func)
+        for _ in range(ut.random.integer(0, max_funcs)):
+            func = self.gen_func_decl(not_void=not_void, is_interface=only_signatures, trait_func=True)
+            funcs.append(func)
+        return funcs

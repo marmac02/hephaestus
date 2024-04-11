@@ -774,5 +774,16 @@ class NothingType(Classifier):
     def is_subtype(self, other: Type):
         return True
 
-
 Nothing = NothingType()
+
+
+#created to facilitate calling trait functions with self (change later if necessary)
+class SelfType(Type):
+    def __init__(self):
+        super().__init__("Self")
+
+    def is_subtype(self, other: Type):
+        return False
+
+    def is_assignable(self, other: Type):
+        return False

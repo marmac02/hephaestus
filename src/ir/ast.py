@@ -381,6 +381,7 @@ class FunctionDeclaration(Declaration):
                  inferred_type: types.Type = None,
                  is_final=True,
                  override=False,
+                 trait_func=False,
                  type_parameters=[]):
         self.name = name
         self.params = params
@@ -389,6 +390,7 @@ class FunctionDeclaration(Declaration):
         self.func_type = func_type
         self.is_final = is_final
         self.override = override
+        self.trait_func = trait_func
         self.type_parameters = type_parameters
         self.inferred_type = (
             self.ret_type if inferred_type is None else inferred_type)
@@ -1279,12 +1281,14 @@ class FunctionCall(Expr):
     def __init__(self, func: str, args: List[CallArgument],
                  receiver: Expr = None,
                  type_args: List[types.Type] = [],
-                 is_ref_call: bool = False):
+                 is_ref_call: bool = False,
+                 trait_func: bool = False):
         self.func = func
         self.args = args
         self.receiver = receiver
         self.type_args = type_args
         self.is_ref_call = is_ref_call
+        self.trait_func = trait_func
         self._can_infer_type_args = False
         self.type_parameters = []
 
@@ -1475,6 +1479,9 @@ class TraitDeclaration(Declaration):
     def get_type(self):
         return types.Trait(self.name) #update when trait Type defined
 
+    def is_parameterized(self):
+        return bool(self.type_parameters)
+
     def __str__(self):
         return "trait {} {{\n  {} }}".format(
             self.name, "\n  ".join(map(str, self.function_signatures))) #fix this when ast.trait ready 
@@ -1599,3 +1606,8 @@ class TraitImpl(Declaration):
                     self.trait == other.trait and
                     check_list_eq(self.functions, other.functions))
         return False
+
+
+class SelfParameter(ParameterDeclaration):
+    def __init__(self):
+        super().__init__(None, types.SelfType())
