@@ -1,3 +1,5 @@
+#GENERATOR
+
 """
 This file includes the program generator.
 
@@ -321,8 +323,8 @@ class Generator():
             # a temporary body as a placeholder.
             body = ast.BottomConstant(ret_type)
         self._remove_unused_type_params(type_params, params, ret_type)
-        #if trait_func:
-        #    params = [ast.SelfParameter()] + params #adding &self parameter for Rust trait functions
+        if trait_func:
+            params = [ast.SelfParameter()] + params #adding &self parameter for Rust trait functions
         func = ast.FunctionDeclaration(
             func_name, params, ret_type, body,
             func_type=(ast.FunctionDeclaration.CLASS_METHOD
@@ -335,6 +337,8 @@ class Generator():
         )
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:
+            if isinstance(p, ast.SelfParameter):
+                continue
             self.context.add_var(self.namespace, p.name, p)
 
         if func.body is not None:
@@ -617,13 +621,6 @@ class Generator():
                 self._add_node_to_trait(parent, node)
 
         node_type[type(node)](parent_namespace, node.name, node)
-
-
-    def _add_node_to_struct(self, parent, node):
-        if isinstance(node, ast.FieldDeclaration):
-            parent.fields.append(node)
-            return
-        assert False, ('Trying to put a node in struct other than a field')
 
 
     # And
@@ -1064,7 +1061,13 @@ class Generator():
             if isinstance(getattr(var_type, 't_constructor', None),
                           self.function_type):
                 continue
-            cls, type_var_map = self._get_class(var_type)
+            
+            temp = self._get_class(var_type) #added for Rust
+            if temp is None:
+                continue
+            cls, type_var_map = temp
+
+            #cls, type_var_map = self._get_class(var_type)
             for field in cls.fields:
                 # Ok here we create a new field whose type corresponds
                 # to the type argument with which the class 'c' is
@@ -1648,6 +1651,9 @@ class Generator():
         initial_depth = self.depth
         self.depth += 1
         for param in func.params:
+            if isinstance(param, ast.SelfParameter):
+                args.append(ast.CallArgument(ast.SelfParameter()))
+                continue
             expr_type = tp.substitute_type(param.get_type(), params_map)
             gen_bottom = expr_type.is_wildcard() or (
                 expr_type.is_parameterized() and expr_type.has_wildcards())
@@ -2118,9 +2124,11 @@ class Generator():
         if type_params and ut.random.bool():
             return type_params
 
+
         builtins = list(self.ret_builtin_types
                         if ret_types
                         else self.builtin_types)
+        
         if exclude_arrays:
             builtins = [
                 t for t in builtins
@@ -2504,7 +2512,13 @@ class Generator():
             if isinstance(getattr(var_type, 't_constructor', None),
                           self.function_type):
                 continue
-            cls, type_map_var = self._get_class(var_type)
+            
+            temp = self._get_class(var_type) #temporary for rust
+            if temp is None:
+                continue
+            cls, type_map_var = temp
+
+            #cls, type_map_var = self._get_class(var_type)
             for attr in self._get_class_attributes(cls, attr_name):
                 attr_type = tp.substitute_type(
                     attr.get_type(), type_map_var)

@@ -43,6 +43,7 @@ class ASTVisitor():
             ast.TraitDeclaration: self.visit_trait_decl,
             ast.TraitImpl: self.visit_trait_impl,
             ast.StructInstantiation: self.visit_struct_instantiation,
+            ast.SelfParameter: self.visit_param_decl,
         }
         visitor = visitors.get(node.__class__)
         if visitor is None:

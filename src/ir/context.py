@@ -10,6 +10,7 @@ class Context():
         self._context = {}
         # A lookup from declarations to namespaces
         self._namespaces = {}
+        self._all_func_decls = {}
 
     def _add_entity(self, namespace, entity, name, value):
         if namespace in self._context:
@@ -41,6 +42,7 @@ class Context():
         self._add_entity(namespace, 'types', type_name, t)
 
     def add_func(self, namespace, func_name, func):
+        self._all_func_decls[func_name] = func
         self._add_entity(namespace, 'funcs', func_name, func)
         self._add_entity(namespace, 'decls', func_name, func)
 
@@ -71,6 +73,7 @@ class Context():
         self._remove_entity(namespace, 'decls', var_name)
 
     def remove_func(self, namespace, func_name):
+        #self._all_func_decls.pop(func_name)
         self._remove_entity(namespace, 'funcs', func_name)
         self._remove_entity(namespace, 'decls', func_name)
 
@@ -211,6 +214,9 @@ class Context():
         if isinstance(parent, ast.ClassDeclaration):
             return parent
         return self.get_parent_class(namespace[:-1])
+
+    def get_all_func_decl(self):
+        return self._all_func_decls
 
 
 def get_decl(context, namespace, decl_name: str, limit=None):

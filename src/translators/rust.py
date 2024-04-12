@@ -154,8 +154,8 @@ class RustTranslator(BaseTranslator):
         len_params = len(node.params)
         len_type_params = len(node.type_parameters)
         type_parameters_res = ", ".join(children_res[len_params:len_type_params + len_params])
-        if self._is_func_in_trait(node.name):
-            param_res = ["&self"] + param_res
+        #if self._is_func_in_trait(node.name):
+        #    param_res = ["&self"] + param_res
 
         #type params implement Copy trait to avoid move issues CHANGE THIS
         #type_parameters_res = " :Copy, ".join(children_res[len_params:len_type_params + len_params])
@@ -176,7 +176,7 @@ class RustTranslator(BaseTranslator):
     @append_to
     def visit_param_decl(self, node):
         param_type = node.param_type
-        if param_type is None: #parameter is self
+        if isinstance(param_type, tp.SelfType): #parameter is self
             res = "&self"
         else:
             res = node.name + ": " + self.get_type_name(param_type) #??? handle vararg 
@@ -185,7 +185,7 @@ class RustTranslator(BaseTranslator):
     @append_to
     def visit_func_ref(self, node):
         receiver = "self." if self._is_func_in_trait(node.func) else ""
-        res = "{receiver}{name}".format(receiver=receiver, name=node.func)
+        res = "{receiver}{name}".format(receiver="", name=node.func)
         return res 
 
 
@@ -217,6 +217,8 @@ class RustTranslator(BaseTranslator):
             args = children_res
         if receiver_expr == "" and self._is_func_in_trait(node.func):
             receiver_expr = "self."
+        if self._is_func_in_trait(node.func):
+            args = args[1:]
         if args is None:
             args = []
         res = "{indent}{receiver}{name}{type_args}({args})".format(

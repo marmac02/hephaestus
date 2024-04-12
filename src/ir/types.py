@@ -787,3 +787,9 @@ class SelfType(Type):
 
     def is_assignable(self, other: Type):
         return False
+
+    def has_type_variables(self):
+        return False
+
+    def is_primitive(self):
+        return False
