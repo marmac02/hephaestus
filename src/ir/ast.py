@@ -1610,4 +1610,4 @@ class TraitImpl(Declaration):
 
 class SelfParameter(ParameterDeclaration):
     def __init__(self):
-        super().__init__(None, types.SelfType())
+        super().__init__("SelfParam", types.SelfType())

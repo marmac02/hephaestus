@@ -102,7 +102,6 @@ class Generator():
                                  cfg.limits.max_top_level):
             self.gen_top_level_declaration()
         self.generate_main_func()
-        
         return ast.Program(self.context, self.language)
 
     def gen_top_level_declaration(self):
@@ -303,6 +302,7 @@ class Generator():
             type_params = []
         if params is not None:
             for p in params:
+                log(self.logger, "Adding parameter {} to context in gen_func_decl".format(p.name))
                 self._add_node_to_parent(self.namespace, p)
         else:
             params = (
@@ -335,11 +335,15 @@ class Generator():
             type_parameters=type_params,
             trait_func=trait_func,
         )
+        msg = "Adding function to context {} {}".format(func_name, ", ".join([str(p) for p in params]))
+        log(self.logger, msg)
         self._add_node_to_parent(self.namespace[:-1], func)
         for p in params:
             if isinstance(p, ast.SelfParameter):
                 continue
             self.context.add_var(self.namespace, p.name, p)
+            msg = "Adding parameter to context: {} in function {}".format(p.name, func_name)
+            log(self.logger, msg)
 
         if func.body is not None:
             body = self._gen_func_body(ret_type)
@@ -558,6 +562,7 @@ class Generator():
                     new_f.override = True
                     new_f.is_final = f.is_final
                     fields.append(new_f)
+                    log(self.logger, "Adding field {} to context in gen_class_fields".format(new_f.name))
                     self._add_node_to_parent(self.namespace, new_f)
                 max_fields = max_fields - len(chosen_fields)
             if max_fields < 0:
@@ -851,6 +856,7 @@ class Generator():
         field = ast.FieldDeclaration(name, field_type, is_final=is_final,
                                      can_override=can_override)
         if add_to_parent:
+            log(self.logger, "Adding field {} to context in gen_field_decl".format(field.name))
             self._add_node_to_parent(self.namespace, field)
         return field
 
@@ -876,7 +882,9 @@ class Generator():
                                            is_final=True,
                                            var_type=var_type,
                                            inferred_type=var_type)
-        self._add_node_to_parent(self.namespace, var_decl)
+        log(self.logger, "Adding global variable {} to context".format(var_decl.name))
+        log(self.logger, "Namespace of the global variable: {}".format(self.namespace))
+        self._add_node_to_parent('global', var_decl)
         return var_decl
 
     def gen_variable_decl(self,
@@ -913,6 +921,8 @@ class Generator():
             is_final=is_final,
             var_type=vtype,
             inferred_type=var_type)
+        #print(var_decl.name, self.namespace)
+        log(self.logger, "Adding variable {} to context in gen_variable_decl".format(var_decl.name))
         self._add_node_to_parent(self.namespace, var_decl)
         return var_decl
 
@@ -1458,6 +1468,7 @@ class Generator():
         # variable has the same name with the variable that appears in
         # the left-hand side of the 'is' expression, but its type is the
         # selected subtype.
+        log(self.logger, "Adding variable {} to context in gen_is_expr".format(var.name))
         self.context.add_var(self.namespace, var.name,
             ast.VariableDeclaration(
                 var.name,
@@ -1559,6 +1570,7 @@ class Generator():
         params = params if params is not None else self._gen_func_params()
         param_types = [p.param_type for p in params]
         for p in params:
+            log(self.logger, "Adding parameter {} to context in gen_lambda".format(p.name))
             self.context.add_var(self.namespace, p.name, p)
         ret_type = self._get_func_ret_type(params, etype, not_void=not_void)
         signature = tp.ParameterizedType(
