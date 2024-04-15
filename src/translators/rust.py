@@ -84,7 +84,7 @@ class RustTranslator(BaseTranslator):
         funcs = self.context.get_all_func_decl()
         #assert func_name in funcs.keys(), "Function not found in context"
         if not func_name in funcs.keys():
-            #if function is not found then it is probably a variable of function type
+            #if function is not found then it is a variable of function type
             return False
         return funcs[func_name].trait_func
 
@@ -377,11 +377,14 @@ class RustTranslator(BaseTranslator):
             c.accept(self)
         children_res = self.pop_children_res(children)
         self.indent = old_indent
-        res = "vec![" + ", ".join(children_res) + "]"
+        array_type = node.array_type
+        type_annotation = " as Vec<{}>".format(self.get_type_name(array_type.type_args[0])) \
+            if len(children_res) == 0 else ""
+        res = "vec![" + ", ".join(children_res) + "]" + type_annotation
 
         #temporary `fix` to handle empty vec![] change this
-        if len(children_res) == 0 and self._parent_is_block():
-            res = "unimplemented!()"
+        #if len(children_res) == 0 and self._parent_is_block():
+        #    res = "unimplemented!()"
         
         return res
     
