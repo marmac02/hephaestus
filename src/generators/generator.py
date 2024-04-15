@@ -122,8 +122,8 @@ class Generator():
             gen_variable_decl,
             #self.gen_class_decl, #disabled for now
             self.gen_func_decl,
-            self.gen_struct_decl,
-            self.gen_trait_decl,
+            #self.gen_struct_decl,
+            #self.gen_trait_decl,
         ]
         #candidates.extend(self.lang_obs.get_top_levl_decl())
         gen_func = ut.random.choice(candidates)
@@ -2730,8 +2730,15 @@ class Generator():
                 func_type_var_map = tu.instantiate_parameterized_function(
                     func.type_parameters, self.get_types(),
                     only_regular=True, type_var_map={})
-                #if func.get_type().is_parameterized():
-                func_type_var_map[func.get_type()] = etype #hardcoded parameterized return type for Rust, if-statement above didn't work
+                
+                #for Rust
+                func_ret_type = func.get_type()
+                if isinstance(func_ret_type, tp.ParameterizedType):
+                    for i, t_param in enumerate(func_ret_type.t_constructor.type_parameters):
+                        func_type_var_map[t_param] = etype.t_constructor.type_parameters[i]
+                else:
+                    func_type_var_map[func.get_type()] = etype #hardcoded parameterized return type for Rust, if-statement above didn't work
+                
             msg = "Generating a method {} of type {}; TypeVarMap {}".format(
                 func.name, etype, func_type_var_map)
             log(self.logger, msg)
