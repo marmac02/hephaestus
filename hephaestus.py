@@ -327,9 +327,12 @@ def gen_program(pid, dirname, packages):
                                                 cli_args.options['Translator'])
     proc = ProgramProcessor(pid, cli_args)
     try:
+        ############################################ setting seed for debugging
+        seed = random.randint(0, 2**31)    #change for fixed seed for debugging
+        utils.random = utils.RandomUtils(seed)
+        ############################################
         start_time_gen = time.process_time()
         program, oracle = proc.get_program()
-        seed = utils.RandomUtils.seed
         if cli_args.examine:
             print("pp program.context._context (to print the context)")
             __import__('ipdb').set_trace()

@@ -13,7 +13,9 @@ def main():
     #test3()
     #test4()
     #test5()
-    test6()
+    #test6()
+    #test7()
+    test8()
 
 
 def test1():
@@ -71,21 +73,7 @@ def test5():
     if_stmt = ast.Conditional(cond, true_branch, false_branch, Type("Integer"))
     c_decl = ast.VariableDeclaration(name="c", inferred_type=Type("Integer"), expr=if_stmt)
     program.add_declaration(c_decl)
-    """ 
-let a = 5;
 
-let mut b = true;
-
-let c = (if (a > 3)
-{
-    a
-  }
-else
-{
-  b = false;
-    5
-  });
-    """
     program_str = utils.translate_program(translator, program)
     print(program_str)
 
@@ -94,9 +82,9 @@ def test6():
     translator = RustTranslator()
     context = Context()
     program = ast.Program(context, "scala")
-    var_decl = ast.VariableDeclaration(name="a", inferred_type=Type("Integer"), expr=ast.IntegerConstant(literal=5, integer_type="Integer"))
+    var_decl = ast.VariableDeclaration(name="a", inferred_type=Type("Integer"), expr=ast.IntegerConstant(literal=5, integer_type="Integer"), var_type=Type("i32"))
     program.add_declaration(var_decl)
-    bool_decl = ast.VariableDeclaration(name="b", inferred_type=Type("Boolean"), expr=ast.BooleanConstant(literal="true"), is_final=False)
+    bool_decl = ast.VariableDeclaration(name="b", inferred_type=Type("Boolean"), expr=ast.BooleanConstant(literal="true"), is_final=False, var_type=Type("bool"))
     program.add_declaration(bool_decl)
 
     cond = ast.Variable("b")
@@ -105,7 +93,7 @@ def test6():
     #true_branch = ast.Block([ast.IntegerConstant(literal=5, integer_type="Integer")], False)
     false_branch = ast.Block([ast.Assignment(ast.Variable(name="b"), ast.BooleanConstant(literal="false")), ast.IntegerConstant(literal=5, integer_type="Integer")], False)
     if_stmt = ast.Conditional(cond, true_branch, false_branch, Type("Integer"))
-    c_decl = ast.VariableDeclaration(name="c", inferred_type=Type("Integer"), expr=if_stmt)
+    c_decl = ast.VariableDeclaration(name="c", inferred_type=Type("Integer"), expr=if_stmt, var_type=Type("i32"))
     program.add_declaration(c_decl)
     """
     let a = 5;
@@ -125,6 +113,53 @@ def test6():
         5
       });
     """
+    program_str = utils.translate_program(translator, program)
+    print(program_str)
+
+def test7():
+    translator = RustTranslator()
+    context = Context()
+    program = ast.Program(context, "scala")
+
+
+    cond = ast.Variable("b")
+    #var_decl = ast.VariableDeclaration(name="var", inferred_type=Type("Integer"), expr=ast.IntegerConstant(literal=0, integer_type="Integer"), is_final=False)
+    #program.add_declaration(var_decl)
+    true_branch = ast.Block([ast.Conditional(ast.EqualityExpr(lexpr=ast.Variable(name="a"), rexpr=ast.IntegerConstant(literal=4, integer_type="Integer"), operator=ast.Operator("==")), \
+        ast.Block([ast.IntegerConstant(5, "Integer")], False), ast.Block([ast.IntegerConstant(8, "Integer")], False), Type("Integer"))], False)
+    false_branch = ast.Block([ast.Assignment(ast.Variable(name="b"), ast.BooleanConstant(literal="false")), ast.IntegerConstant(literal=5, integer_type="Integer")], False)
+    if_stmt = ast.Conditional(cond, true_branch, false_branch, Type("Integer"))
+    func_param1 = ast.ParameterDeclaration("a", Type("i32"))
+    func_param2 = ast.ParameterDeclaration("word", Type("String"))
+    func_body = ast.Block([ast.VariableDeclaration(name="b", inferred_type=Type("Boolean"), expr=ast.BooleanConstant("true"), is_final=False), \
+        ast.VariableDeclaration(name="p", inferred_type=Type("Char"), expr=ast.CharConstant("p"), is_final=False), if_stmt], False)
+    func = ast.FunctionDeclaration("someFun", [func_param1, func_param2], Type("i32"), func_body, 1)
+    program.add_declaration(func)
+    program_str = utils.translate_program(translator, program)
+    print(program_str)
+
+def test8():
+    translator = RustTranslator()
+    context = Context()
+    program = ast.Program(context, "rust")
+    cond = ast.Variable("b")
+    field1 = ast.FieldDeclaration("field1", Type("i32"))
+    struct = ast.StructDeclaration("SomeStruct", [field1])
+    program.add_declaration(struct)
+
+    func_param1 = ast.ParameterDeclaration("a", Type("i32"))
+    func_param2 = ast.ParameterDeclaration("word", Type("String"))
+    func = ast.FunctionDeclaration("someFun", [func_param1, func_param2], Type("i32"), None, 1)
+    true_branch = ast.Block([ast.Conditional(ast.EqualityExpr(lexpr=ast.Variable(name="a"), rexpr=ast.IntegerConstant(literal=4, integer_type="Integer"), operator=ast.Operator("==")), \
+        ast.Block([ast.IntegerConstant(5, "Integer")], False), ast.Block([ast.IntegerConstant(8, "Integer")], False), Type("Integer"))], False)
+    false_branch = ast.Block([ast.Assignment(ast.Variable(name="b"), ast.BooleanConstant(literal="false")), ast.IntegerConstant(literal=5, integer_type="Integer")], False)
+    if_stmt = ast.Conditional(cond, true_branch, false_branch, Type("Integer"))
+    func2_body = ast.Block([ast.VariableDeclaration(name="b", inferred_type=Type("Boolean"), expr=ast.BooleanConstant("true"), is_final=False), \
+        ast.VariableDeclaration(name="p", inferred_type=Type("Char"), expr=ast.CharConstant("p"), is_final=False), if_stmt], False)
+    func2 = ast.FunctionDeclaration("someFun2", [func_param1], Type("i32"), func2_body, 1)
+    trait = ast.TraitDeclaration("SomeTrait", [func], [func2])
+    program.add_declaration(trait)
+
     program_str = utils.translate_program(translator, program)
     print(program_str)
 

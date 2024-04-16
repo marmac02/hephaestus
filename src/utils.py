@@ -1,5 +1,5 @@
 from collections import defaultdict
-import random
+import random as random_lib
 import string
 import pickle
 import os
@@ -118,18 +118,20 @@ class RandomUtils():
     # Construct a random word pool of size 'WORD_POOL_LEN'.
     #WORDS = set(random.sample(
     #    read_lines(os.path.join(resource_path, 'words')), WORD_POOL_LEN))
+    #INITIAL_WORDS = set(WORDS)
     
     ################################ for debugging we keep the same word pool
     WORDS = set(read_lines(os.path.join(resource_path, 'words')))
     word_list = list(WORDS)
     word_list.sort()
-    INITIAL_WORDS = word_list[:WORD_POOL_LEN]
+    WORDS = word_list[:WORD_POOL_LEN]
+    INITIAL_WORDS = WORDS
     ################################
 
-    def __init__(self):
-        if RandomUtils.seed is None:
-            RandomUtils.seed = random.randint(0, 2**31) #substitue here with a fixed seed for debugging
-        self.r = random.Random(RandomUtils.seed)
+    def __init__(self, seed=None):
+        self.r = random_lib.Random(seed)
+        self.random_word_selection = random_lib.Random(42)
+        self.reset_word_pool()
 
     def reset_word_pool(self):
         self.WORDS = list(self.INITIAL_WORDS)
@@ -138,7 +140,7 @@ class RandomUtils():
         return self.r.random() < prob
 
     def word(self):
-        word = self.r.choice(tuple(self.WORDS))
+        word =self.random_word_selection.choice(tuple(self.WORDS))
         self.WORDS.remove(word)
         return word
 
