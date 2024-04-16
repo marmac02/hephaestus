@@ -1,5 +1,5 @@
 from collections import defaultdict
-import random
+import random as random_lib
 import string
 import pickle
 import os
@@ -110,19 +110,20 @@ def get_reserved_words(resource_path, language):
     path = os.path.join(resource_path, filename)
     return path2set(path)
 
-
 class RandomUtils():
-
+    seed = None #static class variable to store seed, for debugging purposes
     resource_path = os.path.join(os.path.split(__file__)[0], "resources")
-
+    
     WORD_POOL_LEN = 10000
     # Construct a random word pool of size 'WORD_POOL_LEN'.
-    WORDS = set(random.sample(
+    WORDS = set(random_lib.sample(
         read_lines(os.path.join(resource_path, 'words')), WORD_POOL_LEN))
     INITIAL_WORDS = set(WORDS)
 
     def __init__(self, seed=None):
-        self.r = random.Random(seed)
+        if RandomUtils.seed is None:
+            RandomUtils.seed = 42#random_lib.randint(0, 2**31)
+        self.r = random_lib.Random(RandomUtils.seed)
 
     def reset_word_pool(self):
         self.WORDS = set(self.INITIAL_WORDS)

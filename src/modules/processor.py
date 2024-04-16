@@ -69,7 +69,7 @@ class ProgramProcessor():
             schedule.append(transformation)
         return schedule
 
-    def get_program(self):
+    def get_program(self, seed=None):
         if self.args.replay:
             if self.args.debug:
                 print("\nLoading program: " + self.args.replay)
@@ -77,12 +77,12 @@ class ProgramProcessor():
             return load_program(self.args.replay), True
         else:
             # Generate a new program.
-            return self.generate_program()
+            return self.generate_program(seed)
 
     def get_transformations(self):
         return self.transformation_schedule[:self.current_transformation]
 
-    def generate_program(self):
+    def generate_program(self, seed=None):
         if self.args.debug:
             print("\nGenerating program: " + str(self.proc_id))
         if self.args.log:
@@ -94,7 +94,8 @@ class ProgramProcessor():
         generator = Generator(
             language=self.args.language,
             logger=logger,
-            options=self.args.options["Generator"])
+            options=self.args.options["Generator"],
+            seed=seed,)
         program = generator.generate()
         return program, True
 

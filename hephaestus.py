@@ -12,6 +12,7 @@ import shutil
 import time
 import traceback
 from collections import namedtuple, OrderedDict
+import random
 
 from src.args import args as cli_args, validate_args, pre_process_args
 from src import utils
@@ -27,6 +28,7 @@ from src.translators.scala import ScalaTranslator
 from src.translators.java import JavaTranslator
 from src.modules.processor import ProgramProcessor
 
+seed = 42
 
 STOP_COND = False
 TRANSLATORS = {
@@ -274,14 +276,14 @@ def process_cp_transformations(pid, dirname, translator, proc,
             )
     if program_str is None:
         program_str = utils.translate_program(translator, program)
-    program_str += "\nfn main() { }" #added for Rust CHANGE THIS
+    #program_str += "\nfn main() { }" #added for Rust CHANGE THIS
     dst_file = os.path.join(dirname, package_name,
                             translator.get_filename())
     dst_file2 = os.path.join(cli_args.test_directory, 'tmp', str(pid),
                              translator.get_filename())
     save_program(program, program_str, dst_file)
     save_program(program, program_str, dst_file2)
-    #print(program_str)
+    print(program_str)
     return dst_file
 
 
@@ -328,7 +330,8 @@ def gen_program(pid, dirname, packages):
     proc = ProgramProcessor(pid, cli_args)
     try:
         start_time_gen = time.process_time()
-        program, oracle = proc.get_program()
+        program, oracle = proc.get_program(42)
+        seed = utils.RandomUtils.seed
         if cli_args.examine:
             print("pp program.context._context (to print the context)")
             __import__('ipdb').set_trace()
@@ -350,6 +353,7 @@ def gen_program(pid, dirname, packages):
                 correct_program: True
             },
             "time": time.process_time() - start_time_gen,
+            "seed": seed,
         }
         if not cli_args.only_correctness_preserving_transformations:
             incorrect_program = process_ncp_transformations(
