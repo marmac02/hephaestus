@@ -2730,14 +2730,9 @@ class Generator():
                 func_type_var_map = tu.instantiate_parameterized_function(
                     func.type_parameters, self.get_types(),
                     only_regular=True, type_var_map={})
-                
-                #for Rust
                 func_ret_type = func.get_type()
-                if isinstance(func_ret_type, tp.ParameterizedType):
-                    for i, t_param in enumerate(func_ret_type.t_constructor.type_parameters):
-                        func_type_var_map[t_param] = etype.t_constructor.type_parameters[i]
-                else:
-                    func_type_var_map[func.get_type()] = etype #hardcoded parameterized return type for Rust, if-statement above didn't work
+                mapping = tu.unify_types(func_ret_type, etype, self.bt_factory)
+                func_type_var_map.update(mapping) #assigning correct type annotation for parameterized function (for Rust)
                 
             msg = "Generating a method {} of type {}; TypeVarMap {}".format(
                 func.name, etype, func_type_var_map)
