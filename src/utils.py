@@ -1,5 +1,5 @@
 from collections import defaultdict
-import random as random_lib
+import random
 import string
 import pickle
 import os
@@ -116,17 +116,23 @@ class RandomUtils():
     
     WORD_POOL_LEN = 10000
     # Construct a random word pool of size 'WORD_POOL_LEN'.
-    WORDS = set(random_lib.sample(
-        read_lines(os.path.join(resource_path, 'words')), WORD_POOL_LEN))
-    INITIAL_WORDS = set(WORDS)
+    #WORDS = set(random.sample(
+    #    read_lines(os.path.join(resource_path, 'words')), WORD_POOL_LEN))
+    
+    ################################ for debugging we keep the same word pool
+    WORDS = set(read_lines(os.path.join(resource_path, 'words')))
+    word_list = list(WORDS)
+    word_list.sort()
+    INITIAL_WORDS = word_list[:WORD_POOL_LEN]
+    ################################
 
-    def __init__(self, seed=None):
+    def __init__(self):
         if RandomUtils.seed is None:
-            RandomUtils.seed = 42#random_lib.randint(0, 2**31)
-        self.r = random_lib.Random(RandomUtils.seed)
+            RandomUtils.seed = random.randint(0, 2**31) #substitue here with a fixed seed for debugging
+        self.r = random.Random(RandomUtils.seed)
 
     def reset_word_pool(self):
-        self.WORDS = set(self.INITIAL_WORDS)
+        self.WORDS = list(self.INITIAL_WORDS)
 
     def bool(self, prob=0.5):
         return self.r.random() < prob
@@ -138,8 +144,8 @@ class RandomUtils():
 
     def remove_reserved_words(self, language):
         reserved_words = get_reserved_words(self.resource_path, language)
-        self.INITIAL_WORDS = self.INITIAL_WORDS - reserved_words
-        self.WORDS = self.WORDS - reserved_words
+        self.INITIAL_WORDS = [word for word in self.INITIAL_WORDS if word not in reserved_words]
+        self.WORDS = [word for word in self.WORDS if word not in reserved_words]
 
     def integer(self, min_int=0, max_int=10):
         return self.r.randint(min_int, max_int)

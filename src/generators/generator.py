@@ -42,8 +42,7 @@ class Generator():
     def __init__(self,
                  language=None,
                  options={},
-                 logger=None,
-                 seed=None,):
+                 logger=None,):
         assert language is not None, "You must specify the language"
         self.language = language
         self.logger: Logger = logger
@@ -55,7 +54,6 @@ class Generator():
         self.namespace = ('global',)
         self.enable_pecs = not language == 'kotlin'
         self.disable_variance_functions = True #disabled for now
-        self.random_gen = ut.RandomUtils(seed) #changed to enable debugging with a fixed seed
 
         # This flag is used for Java lambdas where local variables references
         # must be final.
@@ -100,7 +98,7 @@ class Generator():
         and then it generates the main function.
         """
         self.context = context or Context()
-        for _ in self.random_gen.range(cfg.limits.min_top_level,
+        for _ in ut.random.range(cfg.limits.min_top_level,
                                  cfg.limits.max_top_level):
             self.gen_top_level_declaration()
         self.generate_main_func()
@@ -128,7 +126,7 @@ class Generator():
             #self.gen_trait_decl,
         ]
         #candidates.extend(self.lang_obs.get_top_levl_decl())
-        gen_func = self.random_gen.choice(candidates)
+        gen_func = ut.random.choice(candidates)
         gen_func()
 
     def generate_main_func(self) -> ast.FunctionDeclaration:
@@ -266,7 +264,7 @@ class Generator():
         class_method = (False if len(self.namespace) < 2 else
                         self.namespace[-2][0].isupper())
         can_override = abstract or is_interface or (class_method and not
-                                    class_is_final and self.random_gen.bool())
+                                    class_is_final and ut.random.bool())
         trait_func = self.namespace[-2][0].isupper() #check if function is declared in a trait
         # Check if this function we want to generate is a nested functions.
         # To do so, we want to find if the function is directly inside the
@@ -295,7 +293,7 @@ class Generator():
                     with_variance=False,
                     blacklist=self._get_type_variable_names(),
                     for_function=True
-                ) if self.random_gen.bool(prob=cfg.prob.parameterized_functions) \
+                ) if ut.random.bool(prob=cfg.prob.parameterized_functions) \
                   else []
 
         else:
@@ -310,7 +308,7 @@ class Generator():
             params = (
                 self._gen_func_params()
                 if (
-                    self.random_gen.bool(prob=0.25) or
+                    ut.random.bool(prob=0.25) or
                     self.language == 'rust' or
                     self.language == 'java' or
                     self.language == 'groovy' and is_interface
@@ -318,7 +316,7 @@ class Generator():
                 else self._gen_func_params_with_default()
             )
         ret_type = self._get_func_ret_type(params, etype, not_void=not_void)
-        if is_interface or (abstract and self.random_gen.bool()):
+        if is_interface or (abstract and ut.random.bool()):
             body, inferred_type = None, None
         else:
             # If we are going to generate a non-abstract method, we generate
@@ -369,10 +367,10 @@ class Generator():
         """
         has_default = False
         params = []
-        for _ in range(self.random_gen.integer(0, cfg.limits.fn.max_params)):
+        for _ in range(ut.random.integer(0, cfg.limits.fn.max_params)):
             param = self.gen_param_decl()
             if not has_default:
-                has_default = self.random_gen.bool()
+                has_default = ut.random.bool()
             if has_default:
                 prev_decl_namespace = self.declaration_namespace
                 self.declaration_namespace = self.namespace
@@ -430,7 +428,7 @@ class Generator():
         initial_depth = self.depth
         self.depth += 1
         class_type = gu.select_class_type(field_type is not None)
-        is_final = self.random_gen.bool() and class_type == \
+        is_final = ut.random.bool() and class_type == \
             ast.ClassDeclaration.REGULAR
         type_params = type_params or self.gen_type_params(
             with_variance=self.language in ['kotlin', 'scala'])
@@ -494,7 +492,7 @@ class Generator():
         ]
         if not class_decls:
             return None
-        class_decl = self.random_gen.choice(class_decls)
+        class_decl = ut.random.choice(class_decls)
         if class_decl.is_parameterized():
             cls_type, type_var_map = tu.instantiate_type_constructor(
                 class_decl.get_type(),
@@ -546,15 +544,15 @@ class Generator():
         if field_type:
             fields.append(self.gen_field_decl(field_type, curr_cls.is_final))
         if not super_cls_info:
-            for _ in range(self.random_gen.integer(0, max_fields)):
+            for _ in range(ut.random.integer(0, max_fields)):
                 fields.append(
                     self.gen_field_decl(class_is_final=curr_cls.is_final))
         else:
             overridable_fields = super_cls_info.super_cls \
                 .get_overridable_fields()
-            k = self.random_gen.integer(0, min(max_fields, len(overridable_fields)))
+            k = ut.random.integer(0, min(max_fields, len(overridable_fields)))
             if overridable_fields:
-                chosen_fields = self.random_gen.sample(overridable_fields, k=k)
+                chosen_fields = ut.random.sample(overridable_fields, k=k)
                 for f in chosen_fields:
                     field_type = tp.substitute_type(
                         f.get_type(), super_cls_info.type_var_map)
@@ -569,7 +567,7 @@ class Generator():
                 max_fields = max_fields - len(chosen_fields)
             if max_fields < 0:
                 return fields
-            for _ in range(self.random_gen.integer(0, max_fields)):
+            for _ in range(ut.random.integer(0, max_fields)):
                 fields.append(
                     self.gen_field_decl(class_is_final=curr_cls.is_final))
         return fields
@@ -671,7 +669,7 @@ class Generator():
                                    abstract=abstract,
                                    is_interface=curr_cls.is_interface()))
         if not super_cls_info:
-            for _ in range(self.random_gen.integer(0, max_funcs)):
+            for _ in range(ut.random.integer(0, max_funcs)):
                 funcs.append(
                     self.gen_func_decl(not_void=not_void,
                                        class_is_final=curr_cls.is_final,
@@ -701,11 +699,11 @@ class Generator():
             len_over_f = len(overridable_funcs)
             if len_over_f > max_funcs:
                 return funcs
-            k = self.random_gen.integer(0, min(max_funcs, len_over_f))
+            k = ut.random.integer(0, min(max_funcs, len_over_f))
             chosen_funcs = (
                 []
                 if not max_funcs or curr_cls.is_interface()
-                else self.random_gen.sample(overridable_funcs, k=k)
+                else ut.random.sample(overridable_funcs, k=k)
             )
             for f in chosen_funcs:
                 funcs.append(
@@ -716,7 +714,7 @@ class Generator():
             max_funcs = max_funcs - len(chosen_funcs)
             if max_funcs < 0:
                 return funcs
-            for _ in range(self.random_gen.integer(0, max_funcs)):
+            for _ in range(ut.random.integer(0, max_funcs)):
                 funcs.append(
                     self.gen_func_decl(not_void=not_void,
                                        class_is_final=curr_cls.is_final,
@@ -817,7 +815,7 @@ class Generator():
                 # same name with a type variable of the overridden function.
                 # So we change the name of the function's type variable to
                 # avoid the conflict.
-                new_name = self.random_gen.caps(blacklist=blacklist)
+                new_name = ut.random.caps(blacklist=blacklist)
                 func_type_vars.append(new_name)
                 blacklist.append(new_name)
                 new_type_param.name = new_name
@@ -851,8 +849,8 @@ class Generator():
             class_is_final: Is the class final.
         """
         name = gu.gen_identifier('lower')
-        can_override = not class_is_final and self.random_gen.bool()
-        is_final = self.random_gen.bool()
+        can_override = not class_is_final and ut.random.bool()
+        is_final = ut.random.bool()
         field_type = etype or self.select_type(exclude_contravariants=True,
                                                exclude_covariants=not is_final)
         field = ast.FieldDeclaration(name, field_type, is_final=is_final,
@@ -874,7 +872,7 @@ class Generator():
                            self.bt_factory.get_float_type(),
                            self.bt_factory.get_boolean_type(),
                            self.bt_factory.get_char_type()]
-        var_type = self.random_gen.choice(available_types)
+        var_type = ut.random.choice(available_types)
         initial_depth = self.depth
         self.depth += 1
         expr = self.generate_expr(var_type, True)
@@ -913,7 +911,7 @@ class Generator():
         expr = expr or self.generate_expr(var_type, only_leaves,
                                           sam_coercion=True)
         self.depth = initial_depth
-        is_final = self.random_gen.bool()
+        is_final = ut.random.bool()
         # We cannot set ? extends X as the type of a variable.
         vtype = var_type.get_bound_rec() if var_type.is_wildcard() else \
             var_type
@@ -968,26 +966,26 @@ class Generator():
         find_subtype = (
             expr_type and
             subtype and expr_type != self.bt_factory.get_void_type()
-            and self.random_gen.bool()
+            and ut.random.bool()
         )
         expr_type = expr_type or self.select_type()
         if find_subtype:
             subtypes = tu.find_subtypes(expr_type, self.get_types(),
                                         include_self=True, concrete_only=True)
             old_type = expr_type
-            expr_type = self.random_gen.choice(subtypes)
+            expr_type = ut.random.choice(subtypes)
             msg = "Found subtype of {}: {}".format(old_type, expr_type)
             log(self.logger, msg)
         generators = self.get_generators(expr_type, only_leaves, subtype,
                                          exclude_var, sam_coercion=sam_coercion)
-        expr = self.random_gen.choice(generators)(expr_type)
+        expr = ut.random.choice(generators)(expr_type)
         # Make a probabilistic choice, and assign the generated expr
         # into a variable, and return that variable reference.
         gen_var = (
             not only_leaves and
             expr_type != self.bt_factory.get_void_type() and
             self._vars_in_context[self.namespace] < cfg.limits.max_var_decls and
-            self.random_gen.bool()
+            ut.random.bool()
         )
         if gen_var:
             self._vars_in_context[self.namespace] += 1
@@ -1039,7 +1037,7 @@ class Generator():
             return ast.Assignment(var_decl.name,
                                   self.generate_expr(var_decl.get_type(),
                                                      only_leaves, subtype))
-        receiver, variable = self.random_gen.choice(variables)
+        receiver, variable = ut.random.choice(variables)
         self.depth = initial_depth
         gen_bottom = (
             variable.get_type().is_wildcard() or
@@ -1134,7 +1132,7 @@ class Generator():
 
         if not assignable_types:
             return None
-        return self.random_gen.choice(assignable_types)
+        return ut.random.choice(assignable_types)
 
     def gen_field_access(self,
                          etype: tp.Type,
@@ -1162,7 +1160,7 @@ class Generator():
             objs.append(gu.AttrReceiverInfo(
                 receiver, None, type_f.attr_decl, None))
         objs = [(obj.receiver_expr, obj.attr_decl) for obj in objs]
-        receiver, attr = self.random_gen.choice(objs)
+        receiver, attr = ut.random.choice(objs)
         self.depth = initial_depth
         return ast.FieldAccess(receiver, attr.name)
 
@@ -1204,7 +1202,7 @@ class Generator():
         if not variables:
             return self.generate_expr(etype, only_leaves=only_leaves,
                                       subtype=subtype, exclude_var=True)
-        varia = self.random_gen.choice([v.name for v in variables])
+        varia = ut.random.choice([v.name for v in variables])
         return ast.Variable(varia)
 
     def gen_array_expr(self,
@@ -1219,7 +1217,7 @@ class Generator():
             subtype: The type of the generated array could be a subtype
                 of `expr_type`.
         """
-        arr_len = self.random_gen.integer(0, 3)
+        arr_len = ut.random.integer(0, 3)
         etype = expr_type.type_args[0]
         exprs = [
             self.generate_expr(etype, only_leaves=only_leaves, subtype=subtype)
@@ -1246,7 +1244,7 @@ class Generator():
         self.depth += 1
         exclude_function_types = self.language == 'java' or self.language == 'rust'
         etype = self.select_type(exclude_function_types=exclude_function_types, exclude_type_vars=True)
-        op = self.random_gen.choice(ast.EqualityExpr.VALID_OPERATORS[self.language])
+        op = ut.random.choice(ast.EqualityExpr.VALID_OPERATORS[self.language])
         e1 = self.generate_expr(etype, only_leaves, subtype=False)
         e2 = self.generate_expr(etype, only_leaves, subtype=False)
         self.depth = initial_depth
@@ -1266,7 +1264,7 @@ class Generator():
         """
         initial_depth = self.depth
         self.depth += 1
-        op = self.random_gen.choice(ast.LogicalExpr.VALID_OPERATORS[self.language])
+        op = ut.random.choice(ast.LogicalExpr.VALID_OPERATORS[self.language])
         e1 = self.generate_expr(self.bt_factory.get_boolean_type(),
                                 only_leaves)
         e2 = self.generate_expr(self.bt_factory.get_boolean_type(),
@@ -1339,15 +1337,15 @@ class Generator():
         }
         initial_depth = self.depth
         self.depth += 1
-        op = self.random_gen.choice(
+        op = ut.random.choice(
             ast.ComparisonExpr.VALID_OPERATORS[self.language])
-        e1_type = self.random_gen.choice(valid_types)
-        e2_type = self.random_gen.choice(e2_types[e1_type])
+        e1_type = ut.random.choice(valid_types)
+        e2_type = ut.random.choice(e2_types[e1_type])
         e1 = self.generate_expr(e1_type, only_leaves)
         e2 = self.generate_expr(e2_type, only_leaves)
         self.depth = initial_depth
         if self.language == 'java' and e1_type.name in ('Boolean', 'String'):
-            op = self.random_gen.choice(
+            op = ut.random.choice(
                 ast.EqualityExpr.VALID_OPERATORS[self.language])
             return ast.EqualityExpr(e1, e2, op)
         return ast.ComparisonExpr(e1, e2, op)
@@ -1375,9 +1373,9 @@ class Generator():
         if subtype:
             subtypes = tu.find_subtypes(etype, self.get_types(),
                                         include_self=True, concrete_only=True)
-            true_type = self.random_gen.choice(subtypes)
-            false_type = self.random_gen.choice(subtypes)
-            tmp_t = self.random_gen.choice(subtypes)
+            true_type = ut.random.choice(subtypes)
+            false_type = ut.random.choice(subtypes)
+            tmp_t = ut.random.choice(subtypes)
             # Find which of the given types is the supertype.
             cond_type = functools.reduce(
                 lambda acc, x: acc if x.is_subtype(acc) else x,
@@ -1452,7 +1450,7 @@ class Generator():
                                       subtype=subtype)
         prev_depth = self.depth
         self.depth += 3
-        var = self.random_gen.choice(final_vars)
+        var = ut.random.choice(final_vars)
         var_type = var.get_type()
         subtypes = tu.find_subtypes(var_type, self.get_types(),
                                     include_self=False, concrete_only=True)
@@ -1461,7 +1459,7 @@ class Generator():
             return self.generate_expr(expr_type, only_leaves=True,
                                       subtype=subtype)
 
-        subtype = self.random_gen.choice(subtypes)
+        subtype = ut.random.choice(subtypes)
         initial_decls = _get_extra_decls(self.namespace)
         prev_namespace = self.namespace
         self.namespace += ('true_block',)
@@ -1608,7 +1606,7 @@ class Generator():
         Returns:
             A function call.
         """
-        if self.random_gen.bool(cfg.prob.func_ref_call):
+        if ut.random.bool(cfg.prob.func_ref_call):
             ref_call = self._gen_func_call_ref(etype, only_leaves, subtype)
             if ref_call:
                 return ref_call
@@ -1650,7 +1648,7 @@ class Generator():
             funcs.append(gu.AttrReceiverInfo(receiver, type_fun.receiver_inst,
                          type_fun.attr_decl, type_fun.attr_inst))
 
-        rand_func = self.random_gen.choice(funcs)
+        rand_func = ut.random.choice(funcs)
         receiver = rand_func.receiver_expr
         params_map = rand_func.receiver_inst
         func = rand_func.attr_decl
@@ -1675,7 +1673,7 @@ class Generator():
                 arg = self.generate_expr(expr_type, only_leaves,
                                          gen_bottom=gen_bottom)
                 if param.default:
-                    if self.language in ['kotlin', 'scala'] and self.random_gen.bool():
+                    if self.language in ['kotlin', 'scala'] and ut.random.bool():
                         # Randomly skip some default arguments.
                         args.append(ast.CallArgument(arg, name=param.name))
                 else:
@@ -1684,7 +1682,7 @@ class Generator():
             else:
                 # This param is a vararg, so provide a random number of
                 # arguments.
-                for _ in range(self.random_gen.integer(0, 3)):
+                for _ in range(ut.random.integer(0, 3)):
                     args.append(ast.CallArgument(
                         self.generate_expr(
                             expr_type.type_args[0],
@@ -1751,7 +1749,7 @@ class Generator():
         if not refs:
             return None
 
-        signature, name, receiver = self.random_gen.choice(refs)
+        signature, name, receiver = ut.random.choice(refs)
 
         # Generate arguments
         args = []
@@ -1793,7 +1791,7 @@ class Generator():
 
         # Apply SAM coercion
         if (sam_coercion and tu.is_sam(self.context, etype)
-                and self.random_gen.bool(cfg.prob.sam_coercion)):
+                and ut.random.bool(cfg.prob.sam_coercion)):
             type_var_map = tu.get_type_var_map_from_ptype(etype)
             sam_sig_etype = tu.find_sam_fun_signature(
                     self.context,
@@ -1907,7 +1905,7 @@ class Generator():
             return None
         # FIXME what happens if subclasses is empty?
         # it may happens due to ParameterizedType with TypeParameters as targs
-        return self.random_gen.choice(
+        return ut.random.choice(
             [s for s in subclasses if s.name == etype.name] or subclasses)
 
     # And
@@ -1922,7 +1920,7 @@ class Generator():
             ast.Lambda or ast.FunctionReference
         """
         # We are unable to produce function references in super calls.
-        if self.random_gen.bool(cfg.prob.func_ref) and not self._in_super_call:
+        if ut.random.bool(cfg.prob.func_ref) and not self._in_super_call:
             func_ref = self._gen_func_ref(etype, only_leaves=only_leaves)
             if func_ref:
                 return func_ref
@@ -1963,7 +1961,7 @@ class Generator():
                 func.attr_decl.name, func.receiver_expr, etype))
 
         if refs:
-            return self.random_gen.choice(refs)
+            return ut.random.choice(refs)
 
         ref = None
         # NOTE a maximum recursion error may occur.
@@ -2135,7 +2133,7 @@ class Generator():
                     continue
                 type_params.append(t_param)
 
-        if type_params and self.random_gen.bool():
+        if type_params and ut.random.bool():
             return type_params
 
 
@@ -2181,7 +2179,7 @@ class Generator():
                                exclude_contravariants=exclude_contravariants,
                                exclude_type_vars=exclude_type_vars,
                                exclude_function_types=exclude_function_types)
-        stype = self.random_gen.choice(types)
+        stype = ut.random.choice(types)
         if stype.is_type_constructor():
             exclude_type_vars = stype.name == self.bt_factory.get_array_type().name
             stype, _ = tu.instantiate_type_constructor(
@@ -2212,7 +2210,7 @@ class Generator():
             blacklist: a list of type parameter names
             for_function: create type parameters for parameterized functions
         """
-        if not count and self.random_gen.bool():
+        if not count and ut.random.bool():
             return []
         type_params = []
         type_param_names = blacklist or []
@@ -2223,8 +2221,8 @@ class Generator():
             if count == 4 and cfg.limits.max_type_params < 4
             else cfg.limits.max_type_params
         )
-        for _ in range(self.random_gen.integer(count or 1, limit)):
-            name = self.random_gen.caps(blacklist=type_param_names)
+        for _ in range(ut.random.integer(count or 1, limit)):
+            name = ut.random.caps(blacklist=type_param_names)
             type_param_names.append(name)
             if for_function:
                 # OK we do this trick for type parameters corresponding to
@@ -2232,10 +2230,10 @@ class Generator():
                 # of classes. TODO: consider being less conservative.
                 name = "F_" + name
             variance = None
-            if with_variance and self.random_gen.bool():
-                variance = self.random_gen.choice(variances)
+            if with_variance and ut.random.bool():
+                variance = ut.random.choice(variances)
             bound = None
-            if self.random_gen.bool(cfg.prob.bounded_type_parameters):
+            if ut.random.bool(cfg.prob.bounded_type_parameters):
                 exclude_covariants = variance == tp.Contravariant or for_function
                 exclude_contravariants = True
                 bound = self.select_type(
@@ -2275,8 +2273,8 @@ class Generator():
         param_types = [p.param_type for p in params
                        if getattr(p.param_type,
                                   'variance', None) != tp.Contravariant]
-        if param_types and self.random_gen.bool():
-            return self.random_gen.choice(param_types)
+        if param_types and ut.random.bool():
+            return ut.random.choice(param_types)
         return self.select_type(exclude_contravariants=True)
 
     def _get_class(self,
@@ -2372,12 +2370,12 @@ class Generator():
         arr_index = None
         vararg_found = False
         vararg = None
-        for i in range(self.random_gen.integer(0, cfg.limits.fn.max_params)):
+        for i in range(ut.random.integer(0, cfg.limits.fn.max_params)):
             param = self.gen_param_decl()
             # If the type of the parameter is an array consider make it
             # a vararg.
             if not vararg_found and self._can_vararg_param(param) and (
-                    self.random_gen.bool()):
+                    ut.random.bool()):
                 param.vararg = True
                 arr_index = i
                 vararg = param
@@ -2431,7 +2429,7 @@ class Generator():
         if (not var_decls and ret_type != self.bt_factory.get_void_type()):
             # The function does not contain any declarations and its return
             # type is not Unit. So, we can create an expression-based function.
-            #body = expr if self.random_gen.bool(cfg.prob.function_expr) else \
+            #body = expr if ut.random.bool(cfg.prob.function_expr) else \
              #   ast.Block([expr])
             body = ast.Block([expr]) #enclosed in block for Rust
         else:
@@ -2447,7 +2445,7 @@ class Generator():
         Example side-effects: assignment, variable declaration, etc.
         """
         exprs = []
-        for _ in range(self.random_gen.integer(0, cfg.limits.fn.max_side_effects)):
+        for _ in range(ut.random.integer(0, cfg.limits.fn.max_side_effects)):
             expr = self.generate_expr(self.bt_factory.get_void_type())
             if expr:
                 exprs.append(expr)
@@ -2705,7 +2703,7 @@ class Generator():
         """
         # Randomly choose to generate a function or a class method.
         gen_method = (
-            self.random_gen.bool() or
+            ut.random.bool() or
             # We avoid generating nested functions that we are going to use
             # as function references.
             signature
@@ -2718,7 +2716,7 @@ class Generator():
             # so that the type parameter is accessible.
             self.namespace = (
                 self.namespace
-                if self.random_gen.bool() or etype.has_type_variables()
+                if ut.random.bool() or etype.has_type_variables()
                 else ast.GLOBAL_NAMESPACE
             )
             # Generate a function
@@ -2777,7 +2775,7 @@ class Generator():
             etype, subtype=subtype, attr_name=attr_name, signature=signature)
         if not class_decls:
             return None
-        cls, type_var_map, attr = self.random_gen.choice(class_decls)
+        cls, type_var_map, attr = ut.random.choice(class_decls)
         func_type_var_map = {}
         is_parameterized_func = isinstance(
             attr, ast.FunctionDeclaration) and attr.is_parameterized()
@@ -3089,7 +3087,7 @@ class Generator():
             # TODO: We may support this case in the future.
             can_wildcard = False
             bounds = list(bounds)
-            type_param = self.random_gen.choice(available_type_params)
+            type_param = ut.random.choice(available_type_params)
             available_type_params.remove(type_param)
             if bounds != [None]:
                 type_param.bound = functools.reduce(
@@ -3142,7 +3140,7 @@ class Generator():
         fields = []
         if field_type:
             fields.append(self.gen_field_decl(field_type, True))
-        for _ in range(self.random_gen.integer(0, max_fields)):
+        for _ in range(ut.random.integer(0, max_fields)):
             fields.append(self.gen_field_decl(None, True))
         return fields
     
@@ -3189,8 +3187,8 @@ class Generator():
         ]
         if not trait_decls:
             return None
-        trait_decl = self.random_gen.choice(trait_decls)
-        if self.random_gen.bool():
+        trait_decl = ut.random.choice(trait_decls)
+        if ut.random.bool():
             return [trait_decl]
         else:
             return None
@@ -3212,7 +3210,7 @@ class Generator():
             func = self.gen_func_decl(ret_type, params=params, not_void=not_void, is_interface=only_signatures, trait_func=True)
             func.trait_func = True
             funcs.append(func)
-        for _ in range(self.random_gen.integer(0, max_funcs)):
+        for _ in range(ut.random.integer(0, max_funcs)):
             func = self.gen_func_decl(not_void=not_void, is_interface=only_signatures, trait_func=True)
             funcs.append(func)
         return funcs
