@@ -184,8 +184,15 @@ class RustTranslator(BaseTranslator):
 
     @append_to
     def visit_func_ref(self, node):
+        type_annotation = ""
+        if node.signature.is_parameterized(): #annotation needed for parameterized functions
+            type_annotation = " as " + self.get_type_name(node.signature)
         receiver = "self." if self._is_func_in_trait(node.func) else ""
-        res = "{receiver}{name}".format(receiver="", name=node.func)
+        res = "{indent}{receiver}{name}{type_annotation}".format(
+            indent=" " * self.indent,
+            receiver="", 
+            name=node.func, 
+            type_annotation=type_annotation)
         return res 
 
 
