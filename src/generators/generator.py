@@ -323,6 +323,7 @@ class Generator():
             # a temporary body as a placeholder.
             body = ast.BottomConstant(ret_type)
         self._remove_unused_type_params(type_params, params, ret_type)
+        type_params = self._add_used_type_params(type_params, params, ret_type) #for Rust
         if trait_func:
             params = [ast.SelfParameter()] + params #adding &self parameter for Rust trait functions
         func = ast.FunctionDeclaration(
@@ -348,10 +349,6 @@ class Generator():
         if func.body is not None:
             body = self._gen_func_body(ret_type)
         func.body = body
-
-        #extend type parameters with ones used in the signature (necessary for Rust)
-        func.type_parameters = self._add_used_type_params(type_params, params, ret_type)
-
         self._inside_java_lambda = prev_inside_java_lamdba
         self._inside_inner_function = prev_inside_inner_function
         self.depth = initial_depth
@@ -1959,7 +1956,6 @@ class Generator():
                 continue
             refs.append(ast.FunctionReference(
                 func.attr_decl.name, func.receiver_expr, etype))
-
         if refs:
             return ut.random.choice(refs)
 
@@ -1974,7 +1970,6 @@ class Generator():
         if not type_fun:
             type_fun = self._gen_matching_func(
                 etype, not_void=True, signature=True)
-
         if type_fun:
             receiver = (
                 None if type_fun.receiver_t is None
@@ -1983,7 +1978,6 @@ class Generator():
             )
             ref = ast.FunctionReference(
                 type_fun.attr_decl.name, receiver, etype)
-
         return ref
 
     ### Standard API of Generator ###
