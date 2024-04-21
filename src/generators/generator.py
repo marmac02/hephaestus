@@ -122,7 +122,7 @@ class Generator():
             gen_variable_decl,
             #self.gen_class_decl, #disabled for now
             self.gen_func_decl,
-            #self.gen_struct_decl,
+            self.gen_struct_decl,
             #self.gen_trait_decl,
         ]
         #candidates.extend(self.lang_obs.get_top_levl_decl())
@@ -1783,6 +1783,7 @@ class Generator():
             subtype: The type could be a subtype of `etype`.
             sam_coercion: Apply sam coercion if possible.
         """
+        
         if getattr(etype, 'is_function_type', lambda: False)():
             return self._gen_func_ref_lambda(etype, only_leaves=only_leaves)
 
@@ -1813,10 +1814,18 @@ class Generator():
         if con is not None:
             return con
 
+        #print(self.context.get_structs(('global',)))
+        #instantiating a new struct in Rust
+        if self.language == 'rust' and isinstance(etype, tp.SimpleClassifier):
+            struct_name = etype.get_name()
+            struct_decl = self.context.get_structs(('global',)).get(struct_name)
+            return self.gen_struct_inst(struct_decl)
+
         # No class was found corresponding to the given type. Probably,
         # the given type is a type parameter. So, if this type parameter has
         # a bound, generate a value of this bound. Otherwise, generate a bottom
         # value.
+
         if class_decl is None or etype.name in self._blacklisted_classes:
             t = etype
             # If the etype corresponds to a type variable not belonging to
@@ -1827,7 +1836,7 @@ class Generator():
                     etype.name not in self._get_type_variable_names()):
                 t = None
             return ast.BottomConstant(t)
-
+        
         if etype.is_type_constructor():
             etype, _ = tu.instantiate_type_constructor(
                 etype, self.get_types(),
@@ -2050,8 +2059,8 @@ class Generator():
             gen_variable
         ]
 
-        if len(self.namespace) > 3 and self.namespace[1][0].isupper() and self.namespace[-2][0].islower():
-            other_candidates.remove(gen_fun_call) #MAYBE it works???
+        if self.language == "rust" and len(self.namespace) > 3 and self.namespace[1][0].isupper() and self.namespace[-2][0].islower():
+            other_candidates.remove(gen_fun_call) #removing function calls for inner trait functions for Rust
             if expr_type == self.bt_factory.get_void_type():
                 return [lambda x: ast.BottomConstant(x)]
 
@@ -2114,6 +2123,14 @@ class Generator():
             c.get_type()
             for c in self.context.get_classes(self.namespace).values()
         ]
+
+        if self.language == 'rust':
+            usr_types = [s.get_type() 
+            for s in self.context.get_structs(self.namespace).values()
+            ] #adding structs for Rust, change this later for a more elegant solution
+            if self.namespace[-1][0].isupper():
+                usr_types = [t for t in usr_types if t.name != self.namespace[-1]] #struct type cannot be recursive
+
         type_params = []
         if not exclude_type_vars:
             t_params = self.context.get_types(namespace=self.namespace, only_current=True) \
@@ -3090,6 +3107,20 @@ class Generator():
 
 
 
+
+    def gen_struct_inst(self, struct_decl: ast.StructDeclaration):
+        """Initialize a struct with values.
+        """
+        initial_depth = self.depth
+        self.depth += 1
+        field_names = [field_decl.name for field_decl in struct_decl.fields]
+        field_exprs = []
+        for field_decl in struct_decl.fields:
+            gen_bottom = (self.depth > (cfg.limits.max_depth * 2))
+            matching_expr = self.generate_expr(field_decl.get_type(), only_leaves=True, exclude_var=True, gen_bottom=gen_bottom)
+            field_exprs.append(matching_expr)
+        self.depth = initial_depth
+        return ast.StructInstantiation(struct_decl.name, field_names, field_exprs)
 
     def gen_struct_decl(self,
                         struct_name: str=None,

@@ -68,6 +68,7 @@ class RustBuiltinFactory(bt.BuiltinFactory):
             types.remove(AnyType()) #might change later
         return types
 
+
 class RustBuiltin(tp.Builtin):
     def __str__(self):
         return str(self.name) + "(rust-builtin)"
@@ -221,22 +222,6 @@ class AnyRefType(AnyType):
 
 class TupleType(tp.TypeConstructor, RustBuiltin):
     pass
-
-class StructType(tp.SimpleClassifier):
-    def __init__(self, name, field_names: List[str], field_types: List[tp.Type]):
-        self.name = name
-        self.field_names = field_names
-        self.field_types = field_types
-
-    def get_field_names(self):
-        return self.field_names
-
-    def get_field_types(self):
-        return self.field_types
-
-class TraitType(tp.AbstractType): #maybe change this
-    def __init__(self, name):
-        self.name = name
 
 
 Unit = UnitType()
