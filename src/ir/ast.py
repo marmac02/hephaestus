@@ -1412,7 +1412,7 @@ class Assignment(Expr):
 
 
 class SuperTraitInstantiation(Node):
-    def __init__(self, trait_type: rust_types.TraitType):
+    def __init__(self, trait_type: types.TraitType):
         self.trait_type = trait_type
 
     def children(self):
@@ -1437,7 +1437,7 @@ class TraitDeclaration(Declaration):
                  function_signatures: List[FunctionDeclaration] = [],
                  default_impls: List[FunctionDeclaration] = [],
                  supertraits: List[SuperTraitInstantiation] = [],
-                 structs_that_impl: List[rust_types.StructType] = [],
+                 structs_that_impl: List[types.StructType] = [],
                  type_parameters: List[types.TypeParameter] = []
                  ):
         self.name = name
@@ -1500,7 +1500,7 @@ class StructDeclaration(Declaration):
     def __init__(self, 
                  name: str,
                  fields: List[FieldDeclaration] = [],
-                 impl_traits: List[rust_types.TraitType] = [],
+                 impl_traits: List[types.TraitType] = [],
                  type_parameters: List[types.TypeParameter] = []):
         self.name = name
         self.fields = fields
@@ -1529,7 +1529,7 @@ class StructDeclaration(Declaration):
             self.type_parameters[i] = c
 
     def get_type(self):
-        return types.Struct(self.name) #revisit when struct type defined
+        return types.SimpleClassifier(self.name)
 
     def get_field(self, field_name):
         for f in self.fields:
@@ -1538,9 +1538,13 @@ class StructDeclaration(Declaration):
         return None
     
 
-class StructInstantiation(Expr):
-    def __init__(self, struct: rust_types.StructType, field_exprs: List[Expr]):
-        self.struct = struct
+class StructInstantiation(New):
+    def __init__(self,
+                 struct_name: str, 
+                 field_names: List[str] = [], 
+                 field_exprs: List[Expr] = []):
+        self.struct_name = struct_name
+        self.field_names = field_names
         self.field_exprs = field_exprs
 
     def children(self):
@@ -1561,8 +1565,8 @@ class StructInstantiation(Expr):
 
 class TraitImpl(Declaration):
     def __init__(self, 
-                 struct: rust_types.StructType, 
-                 trait: rust_types.TraitType,
+                 struct: types.StructType, 
+                 trait: types.TraitType,
                  functions: List[FunctionDeclaration] = [],
                  type_parameters: List[types.TypeParameter] = []):
         self.name = name
@@ -1594,7 +1598,7 @@ class TraitImpl(Declaration):
             self.type_parameters[i] = c
 
     def get_type(self):
-        return types.TraitImpl(self.name, self.struct, self.trait) #revisit, should it even have a type?
+        return self.name
 
     def __str__(self):
         return "impl {} for {} {{\n  {} }}".format(

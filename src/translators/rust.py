@@ -591,20 +591,21 @@ class RustTranslator(BaseTranslator):
             c.accept(self)
         self.indent = old_indent
         children_res = self.pop_children_res(children)
-        type_args = (
-            "::<" + ", ".join([self.get_type_name(t) for t in node.type_args]) + ">"
-            if not node.can_infer_type_args and node.type_args
-            else ""
-        )
-        field_names = node.struct.get_field_names() #this must be implemented for struct type
-        res = "{indent}{name}{type_args} { ".format(
+        #type_args = (
+        #    "::<" + ", ".join([self.get_type_name(t) for t in node.type_args]) + ">"
+        #    if node.type_args
+        #    else ""
+        #)
+        type_args = ""
+        field_names = node.field_names
+        res = "{indent}{name}{type_args} {{ ".format(
             indent=" "*self.indent,
-            name=node.struct.name,
+            name=node.struct_name,
             type_args=type_args
         )
         for ind, field_name in enumerate(field_names):
             res += field_name + ": " + children_res[ind] + ", "
-        res += "}"
+        res += "}}"
         return res
 
     @append_to

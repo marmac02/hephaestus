@@ -793,3 +793,13 @@ class SelfType(Type):
 
     def is_primitive(self):
         return False
+
+
+class StructType(SimpleClassifier):
+    def __init__(self, name):
+        self.name = name
+
+
+class TraitType(AbstractType): #maybe change this
+    def __init__(self, name):
+        self.name = name
