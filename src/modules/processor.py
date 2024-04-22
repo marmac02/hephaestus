@@ -2,6 +2,7 @@
 import sys
 
 from src.generators.generator import Generator
+from src.generators.rust_generator import RustGenerator
 from src.transformations.type_erasure import TypeErasure
 from src.transformations.type_overwriting import TypeOverwriting
 from src.utils import random, read_lines, load_program
@@ -91,7 +92,8 @@ class ProgramProcessor():
                             self.proc_id)
         else:
             logger = None
-        generator = Generator(
+        generator_class = RustGenerator if self.args.language == "rust" else Generator
+        generator = generator_class(
             language=self.args.language,
             logger=logger,
             options=self.args.options["Generator"],)
