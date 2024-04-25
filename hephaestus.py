@@ -281,7 +281,7 @@ def process_cp_transformations(pid, dirname, translator, proc,
                              translator.get_filename())
     save_program(program, program_str, dst_file)
     save_program(program, program_str, dst_file2)
-    #print(program_str)
+    print(program_str)
     return dst_file
 
 
@@ -330,6 +330,8 @@ def gen_program(pid, dirname, packages):
         ############################################ setting seed for debugging
         seed = random.randint(0, 2**31)    #change for fixed seed for debugging
         utils.random = utils.RandomUtils(seed)
+        print()
+        print("Seed: ", seed)
         ############################################
         start_time_gen = time.process_time()
         program, oracle = proc.get_program()

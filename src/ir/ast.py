@@ -1528,7 +1528,13 @@ class StructDeclaration(Declaration):
         for i, c in enumerate(type_params):
             self.type_parameters[i] = c
 
+    def is_parameterized(self):
+        return bool(self.type_parameters)
+
     def get_type(self):
+        if self.type_parameters:
+            return types.TypeConstructor(
+                self.name, self.type_parameters)
         return types.SimpleClassifier(self.name)
 
     def get_field(self, field_name):
@@ -1536,6 +1542,10 @@ class StructDeclaration(Declaration):
             if f.name == field_name:
                 return f
         return None
+
+    def get_all_fields(self) -> Set[FieldDeclaration]:
+        return set(self.fields)
+
     
 
 class StructInstantiation(New):
