@@ -577,9 +577,8 @@ class RustGenerator(Generator):
                 trait.function_signatures.append(node)
             else:
                 trait.default_impls.append(node)
-        #print(node)
-        #assert False, ('Trying to put a node in trait other than a function')
 
+    
     def _add_node_to_parent(self, parent_namespace, node):
         node_type = {
             ast.FunctionDeclaration: self.context.add_func,
@@ -818,7 +817,6 @@ class RustGenerator(Generator):
             new_type_params.append(new_type_param)
         return new_type_params, substituted_type_params
 
-    ''' gen_field_decl from superclass is used
     def gen_field_decl(self, etype=None,
                        class_is_final=True,
                        add_to_parent=True) -> ast.FieldDeclaration:
@@ -839,7 +837,6 @@ class RustGenerator(Generator):
             log(self.logger, "Adding field {} to context in gen_field_decl".format(field.name))
             self._add_node_to_parent(self.namespace, field)
         return field
-    '''
 
     #gen_global_variable_decl added for Rust
     def gen_global_variable_decl(self) -> ast.VariableDeclaration:
@@ -902,7 +899,6 @@ class RustGenerator(Generator):
             is_final=is_final,
             var_type=vtype,
             inferred_type=var_type)
-        #print(var_decl.name, self.namespace)
         log(self.logger, "Adding variable {} to context in gen_variable_decl".format(var_decl.name))
         self._add_node_to_parent(self.namespace, var_decl)
         return var_decl
@@ -1203,7 +1199,9 @@ class RustGenerator(Generator):
         is_parameterized_func = isinstance(
             attr, ast.FunctionDeclaration) and attr.is_parameterized()
         if s.is_parameterized():
-            raise ValueError("Support for parameterized structs is not implemented yet.")
+            s_type, params_map = tu.instantiate_type_constructor(
+                s.get_type(), self.get_types(), type_var_map=type_var_map,
+                disable_variance_functions=self.disable_variance_functions)
         else:
             s_type, params_map = s.get_type(), {}
             #do we want/are allowed to have parameterized functions implemented by structs
@@ -1313,7 +1311,7 @@ class RustGenerator(Generator):
         initial_depth = self.depth
         self.depth += 1
         exclude_function_types = self.language == 'java' or self.language == 'rust'
-        etype = self.select_type(exclude_function_types=exclude_function_types, exclude_type_vars=True)
+        etype = self.select_type(exclude_function_types=exclude_function_types, exclude_type_vars=True, exclude_usr_types=True)
         op = ut.random.choice(ast.EqualityExpr.VALID_OPERATORS[self.language])
         e1 = self.generate_expr(etype, only_leaves, subtype=False)
         e2 = self.generate_expr(etype, only_leaves, subtype=False)
@@ -1944,8 +1942,9 @@ class RustGenerator(Generator):
         new_type = s_decl.get_type()
         if s_decl.is_parameterized():
             new_type = new_type.new(etype.type_args)
-        print(type(new_type))
-        return ast.New(new_type, args)
+        field_names = [f.name for f in s_decl.fields]
+        return ast.StructInstantiation(s_decl.name, field_names, args)
+        #return ast.New(new_type, args)
 
     # Where
 
@@ -2172,7 +2171,8 @@ class RustGenerator(Generator):
                   exclude_covariants=False,
                   exclude_contravariants=False,
                   exclude_type_vars=False,
-                  exclude_function_types=False) -> List[tp.Type]:
+                  exclude_function_types=False,
+                  exclude_usr_types=False) -> List[tp.Type]:
         """Get all available types.
 
         Including user-defined types, built-ins, and function types.
@@ -2190,17 +2190,12 @@ class RustGenerator(Generator):
         Returns:
             A list of available types.
         """
-        usr_types = [
-            c.get_type()
-            for c in self.context.get_classes(self.namespace).values()
-        ]
 
-        if self.language == 'rust':
-            usr_types = [s.get_type() 
+        usr_types = [s.get_type() 
             for s in self.context.get_structs(self.namespace).values()
-            ] #adding structs for Rust, change this later for a more elegant solution
-            if self.namespace[-1][0].isupper():
-                usr_types = [t for t in usr_types if t.name != self.namespace[-1]] #struct type cannot be recursive
+        ] if not exclude_usr_types else []
+        if self.namespace[-1][0].isupper():
+            usr_types = [t for t in usr_types if t.name != self.namespace[-1]] #struct type cannot be recursive
 
         type_params = []
         if not exclude_type_vars:
@@ -2238,7 +2233,8 @@ class RustGenerator(Generator):
                     exclude_covariants=False,
                     exclude_contravariants=False,
                     exclude_type_vars=False,
-                    exclude_function_types=False) -> tp.Type:
+                    exclude_function_types=False,
+                    exclude_usr_types=False) -> tp.Type:
         """Select a type from the all available types.
 
         It will always instantiating type constructors to parameterized types.
@@ -2260,7 +2256,8 @@ class RustGenerator(Generator):
                                exclude_covariants=exclude_covariants,
                                exclude_contravariants=exclude_contravariants,
                                exclude_type_vars=exclude_type_vars,
-                               exclude_function_types=exclude_function_types)
+                               exclude_function_types=exclude_function_types,
+                               exclude_usr_types=exclude_usr_types)
         stype = ut.random.choice(types)
         if stype.is_type_constructor():
             exclude_type_vars = stype.name == self.bt_factory.get_array_type().name
@@ -2269,7 +2266,8 @@ class RustGenerator(Generator):
                                       exclude_covariants=True,
                                       exclude_contravariants=True,
                                       exclude_type_vars=exclude_type_vars,
-                                      exclude_function_types=exclude_function_types),
+                                      exclude_function_types=exclude_function_types,
+                                      exclude_usr_types=exclude_usr_types),
                 enable_pecs=self.enable_pecs,
                 disable_variance_functions=self.disable_variance_functions,
                 variance_choices={}
@@ -2614,7 +2612,7 @@ class RustGenerator(Generator):
             AttrReceiverInfo
         """
         decls = []
-        variables = self.context.get_vars(self.namespace).values()
+        variables = self.context.get_vars(self.namespace, only_current=self._inside_inner_function).values()
         for var in variables:
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
@@ -3189,13 +3187,21 @@ class RustGenerator(Generator):
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, struct)
         self._blacklisted_structs.add(struct_name)
         fields = self.gen_struct_fields(field_type) #fields added to fields list in _add_node_to_parent call of gen_field_decl
-        fields_types = [f.get_type() for f in fields]
-        type_params = [t_param for t_param in type_params if t_param in fields_types] #remove unused type parameters
+        used_type_params = self._get_used_type_params(fields)
+        type_params = [t_param for t_param in type_params if t_param in used_type_params] #remove unused type parameters
         struct.type_parameters = type_params
         self._blacklisted_structs.remove(struct_name)
         self.namespace = initial_namespace
         self.depth = initial_depth
         return struct
+
+    def _get_used_type_params(self, fields):
+        # Get the type parameters that are used in the fields.
+        used_type_params = [f.get_type() for f in fields if f.get_type().is_type_var()]
+        for f in fields:
+            if f.get_type().is_parameterized():
+                used_type_params.extend(f.get_type().type_args)
+        return used_type_params
 
 
     def gen_struct_fields(self, field_type: tp.Type=None):
@@ -3236,6 +3242,7 @@ class RustGenerator(Generator):
         self.gen_trait_functions(fret_type=fret_type, not_void=not_void, signature=signature, only_signatures=True)
         #self.gen_func_decl(fret_type, not_void=not_void, is_interface=False, trait_func=True)
         self._inside_trait_decl = False
+        self.namespace = initial_namespace
         return trait
 
 
