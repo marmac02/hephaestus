@@ -212,7 +212,7 @@ class RustTranslator(BaseTranslator):
         )
         segs = node.func.rsplit(".", 1)
         if node.receiver:
-            receiver_expr = children_res[0] + '.'
+            receiver_expr = children_res[0] + "."
             func = node.func
             args = children_res[1:]
         else:
@@ -228,11 +228,13 @@ class RustTranslator(BaseTranslator):
             args = args[1:]
         if args is None:
             args = []
-        res = "{indent}{receiver}{name}{type_args}({args})".format(
+        res = "{indent}{left_bracket}{receiver}{name}{type_args}{right_bracket}({args})".format(
             indent=" " * self.indent,
+            left_bracket="(" if receiver_expr else "",
             receiver=receiver_expr,
             name=func,
             type_args=type_args,
+            right_bracket=")" if receiver_expr else "",
             args=", ".join(args)
         )
         return res
@@ -605,7 +607,7 @@ class RustTranslator(BaseTranslator):
         )
         for ind, field_name in enumerate(field_names):
             res += field_name + ": " + children_res[ind] + ", "
-        res += "}}"
+        res += "}"
         return res
 
     @append_to
