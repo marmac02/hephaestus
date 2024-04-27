@@ -1430,80 +1430,16 @@ class SuperTraitInstantiation(Node):
         return False
 
 
-
-class TraitDeclaration(Declaration):
-    def __init__(self, 
-                 name: str, 
-                 function_signatures: List[FunctionDeclaration] = [],
-                 default_impls: List[FunctionDeclaration] = [],
-                 supertraits: List[SuperTraitInstantiation] = [],
-                 structs_that_impl: List[types.StructType] = [],
-                 type_parameters: List[types.TypeParameter] = []
-                 ):
-        self.name = name
-        self.function_signatures = function_signatures
-        self.default_impls = default_impls
-        self.supertraits = supertraits
-        self.structs_that_impl = structs_that_impl  
-        self.type_parameters = type_parameters
-    
-    @property
-    def attributes(self):
-        return self.function_signatures + self.default_impls
-    
-    def children(self):
-        return self.function_signatures + self.default_impls + self.supertraits + self.type_parameters
-
-    def update_children(self, children):
-        def get_lst(start, end):
-            return children[start:end]
-
-        super().update_children(children)
-        len_func_signatures = len(self.function_signatures)
-        len_default_impls = len(self.default_impls)
-        len_supertraits = len(self.supertraits)
-        len_tp = len(self.type_parameters)
-        function_signs = get_lst(0, len_func_signatures)
-        for i, c in enumerate(function_signs):
-            self.function_signatures[i] = c
-        default_impls = get_lst(len_func_signatures, len_func_signatures + len_default_impls)
-        for i, c in enumerate(default_impls):
-            self.default_impls[i] = c
-        supertraits = get_lst(len_func_signatures + len_default_impls, len_func_signatures + len_default_impls + len_supertraits)
-        for i, c in enumerate(supertraits):
-            self.supertraits[i] = c
-        type_params = get_lst(len_func_signatures + len_default_impls + len_supertraits, len_func_signatures + len_default_impls + len_supertraits + len_tp)
-        for i, c in enumerate(type_params):
-            self.type_parameters[i] = c
-
-    def get_type(self):
-        return types.Trait(self.name) #update when trait Type defined
-
-    def is_parameterized(self):
-        return bool(self.type_parameters)
-
-    def __str__(self):
-        return "trait {} {{\n  {} }}".format(
-            self.name, "\n  ".join(map(str, self.function_signatures))) #fix this when ast.trait ready 
-
-    def is_equal(self, other):
-        if isinstance(other, TraitDeclaration):
-            return (self.name == other.name and
-                    check_list_eq(self.function_signatures, other.function_signatures) and
-                    check_list_eq(self.default_impls, other.default_impls) and
-                    check_list_eq(self.supertraits, other.supertraits) and
-                    check_list_eq(self.type_parameters, other.type_parameters))
-        return False
-
-
 class StructDeclaration(Declaration):
     def __init__(self, 
                  name: str,
                  fields: List[FieldDeclaration] = [],
+                 functions: List[FunctionDeclaration] = [],
                  impl_traits: List[types.TraitType] = [],
                  type_parameters: List[types.TypeParameter] = []):
         self.name = name
         self.fields = fields
+        self.functions = functions
         self.impl_traits = impl_traits
         self.type_parameters = type_parameters
 
@@ -1573,13 +1509,83 @@ class StructInstantiation(New):
                     check_list_eq(self.field_exprs, other.field_exprs))
 
 
-class TraitImpl(Declaration):
+class TraitDeclaration(Declaration):
+    def __init__(self, 
+                 name: str, 
+                 function_signatures: List[FunctionDeclaration] = [],
+                 default_impls: List[FunctionDeclaration] = [],
+                 supertraits: List[SuperTraitInstantiation] = [],
+                 structs_that_impl: List[StructDeclaration] = [],
+                 type_parameters: List[types.TypeParameter] = []
+                 ):
+        self.name = name
+        self.function_signatures = function_signatures
+        self.default_impls = default_impls
+        self.supertraits = supertraits
+        self.structs_that_impl = structs_that_impl  
+        self.type_parameters = type_parameters
+    
+    @property
+    def attributes(self):
+        return self.function_signatures + self.default_impls
+    
+    def children(self):
+        return self.function_signatures + self.default_impls + self.supertraits + self.type_parameters
+
+    def update_children(self, children):
+        def get_lst(start, end):
+            return children[start:end]
+
+        super().update_children(children)
+        len_func_signatures = len(self.function_signatures)
+        len_default_impls = len(self.default_impls)
+        len_supertraits = len(self.supertraits)
+        len_tp = len(self.type_parameters)
+        function_signs = get_lst(0, len_func_signatures)
+        for i, c in enumerate(function_signs):
+            self.function_signatures[i] = c
+        default_impls = get_lst(len_func_signatures, len_func_signatures + len_default_impls)
+        for i, c in enumerate(default_impls):
+            self.default_impls[i] = c
+        supertraits = get_lst(len_func_signatures + len_default_impls, len_func_signatures + len_default_impls + len_supertraits)
+        for i, c in enumerate(supertraits):
+            self.supertraits[i] = c
+        type_params = get_lst(len_func_signatures + len_default_impls + len_supertraits, len_func_signatures + len_default_impls + len_supertraits + len_tp)
+        for i, c in enumerate(type_params):
+            self.type_parameters[i] = c
+
+    def get_type(self):
+        if self.type_parameters:
+            return types.TypeConstructor(
+                self.name, self.type_parameters)
+        return types.SimpleClassifier(
+            self.name)
+    
+    def is_parameterized(self):
+        return bool(self.type_parameters)
+
+    def __str__(self):
+        return "trait {} {{\n  {} }}".format(
+            self.name, "\n  ".join(map(str, self.function_signatures))) #fix this when ast.trait ready 
+
+    def is_equal(self, other):
+        if isinstance(other, TraitDeclaration):
+            return (self.name == other.name and
+                    check_list_eq(self.function_signatures, other.function_signatures) and
+                    check_list_eq(self.default_impls, other.default_impls) and
+                    check_list_eq(self.supertraits, other.supertraits) and
+                    check_list_eq(self.type_parameters, other.type_parameters))
+        return False
+
+
+
+class Impl(Declaration):
     def __init__(self, 
                  struct: types.StructType, 
                  trait: types.TraitType,
-                 functions: List[FunctionDeclaration] = [],
+                 functions: List[FunctionDeclaration] = [], #available functions that are implemented for this struct
                  type_parameters: List[types.TypeParameter] = []):
-        self.name = name
+        self.name = "impl"
         self.struct = struct
         self.trait = trait
         self.functions = functions
@@ -1608,7 +1614,10 @@ class TraitImpl(Declaration):
             self.type_parameters[i] = c
 
     def get_type(self):
-        return self.name
+        if self.type_parameters:
+            return types.TypeConstructor(
+                self.name, self.type_parameters)
+        return types.SimpleClassifier(self.name)
 
     def __str__(self):
         return "impl {} for {} {{\n  {} }}".format(
