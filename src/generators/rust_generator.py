@@ -38,6 +38,7 @@ class RustGenerator(Generator):
         self.namespace = ('global',)
         self.enable_pecs = not language == 'kotlin'
         self.disable_variance_functions = True #disabled for now
+        self.impl_count = 0
 
         # This flag is used for Java lambdas where local variables references
         # must be final.
@@ -106,6 +107,7 @@ class RustGenerator(Generator):
             self.gen_func_decl,
             self.gen_struct_decl,
             self.gen_trait_decl,
+            self.gen_impl,
         ]
         #candidates.extend(self.lang_obs.get_top_levl_decl())
         gen_func = ut.random.choice(candidates)
@@ -589,6 +591,7 @@ class RustGenerator(Generator):
             ast.Lambda: self.context.add_lambda,
             ast.TraitDeclaration: self.context.add_trait,
             ast.StructDeclaration: self.context.add_struct,
+            ast.Impl: self.context.add_impl,
         }
         if parent_namespace == ast.GLOBAL_NAMESPACE:
             node_type[type(node)](parent_namespace, node.name, node)
@@ -2750,15 +2753,11 @@ class RustGenerator(Generator):
             not_void: do not create functions that return void.
             signature: etype is a signature.
         """
-        # Randomly choose to generate a function or a class method.
-        gen_method = (
-            ut.random.bool() or
-            # We avoid generating nested functions that we are going to use
-            # as function references.
-            signature
+        # Randomly choose to generate a function or a trait function.
+        gen_trait_func = (
+            ut.random.bool()
         )
-        gen_method = False #disabling methods for now
-        if not gen_method:
+        if not False: #disabled temporarily
             initial_namespace = self.namespace
             # If the given type 'etype' is a type parameter, then the
             # function we want to generate should be in the current namespace,
@@ -2787,9 +2786,8 @@ class RustGenerator(Generator):
                 func.name, etype, func_type_var_map)
             log(self.logger, msg)
             return gu.AttrAccessInfo(None, {}, func, func_type_var_map)
-        # Generate a class containing the requested function
-        return self._gen_matching_class(etype, 'functions',
-                                        signature=signature)
+        # Generate a trait containing the requested function
+        return self._gen_matching_trait(etype, signature=signature)
 
     def _get_matching_class(self,
                             etype: tp.Type,
@@ -3284,3 +3282,159 @@ class RustGenerator(Generator):
             func = self.gen_func_decl(not_void=not_void, is_interface=only_signatures, trait_func=True)
             funcs.append(func)
         return funcs
+
+    def gen_impl(self,
+                 fret_type: tp.Type=None,
+                 not_void: bool=False,
+                 type_params: List[tp.TypeParameter]=None,
+                 signature: tp.ParameterizedType=None, #remove this???
+                 struct: ast.StructDeclaration=None,
+                 trait: ast.TraitDeclaration=None,
+                 ) -> ast.Impl:
+        """Generate an impl block.
+           Args:
+              fret_type: at least one function will return this type.
+              not_void: do not generate functions that return void.
+              type_params: list of type parameters.
+              signature: generate at least one function with this signature.
+              struct: struct to implement.
+              trait: trait whose functions are to be implemented.
+        """
+        initial_namespace = self.namespace
+        impl_id = self._get_impl_id()
+        self.namespace += (impl_id,)
+        if fret_type is not None:
+            type_fun = self._get_matching_trait(fret_type)
+            if not type_fun:
+                type_fun = _gen_matching_trait(fret_type, True, signature)
+        elif trait is None:
+            available_traits = list(self.context.get_traits(self.namespace).values())
+            if available_traits:
+                trait = ut.random.choice(available_traits)
+            else:
+                trait = self.gen_trait_decl()
+        if struct is None:
+            structs_in_context = set(self.context.get_structs(self.namespace).values())
+            implemented_structs = set(trait.structs_that_impl)
+            available_structs = list(structs_in_context - implemented_structs)
+            if available_structs:
+                struct = ut.random.choice(available_structs)
+            else:
+                struct = self.gen_struct_decl()
+        functions = []
+        for func_decl in trait.function_signatures:
+            func = deepcopy(func_decl)
+            func.body = self._gen_func_body(func.get_type()) #TODO: make struct fields accessible with self
+            functions.append(func)
+        for func_decl in trait.default_impls:
+            func = deepcopy(func_decl)
+            if ut.random.bool():
+                #decide randomly to override the default implementation
+                func.body = self._gen_func_body(func.get_type())
+                functions.append(func)
+        struct.functions.extend(functions)
+        trait.structs_that_impl.append(struct)
+        impl = ast.Impl(struct, trait, functions)
+        self._add_node_to_parent(ast.GLOBAL_NAMESPACE, impl)
+        self.namespace = initial_namespace
+        return impl
+
+    def _get_impl_id(self):
+        #create a unique identifier for impl block
+        self.impl_count += 1
+        return "impl" + str(self.impl_count)
+
+    def _get_matching_trait(self, fret_type: tp.Type):
+        trait_decls = self._get_matching_trait_decls(fret_type, False)
+        if not trait_decls:
+            return None
+        t, type_var_map, func = ut.random.choice(trait_decls)
+        func_type_var_map = {}
+        is_parameterized_func = func.is_parameterized()
+        if t.is_parameterized():
+            t_type_var_map = type_var_map
+            t_type, type_var_map = tu.instantiate_type_constructor(
+                t.get_type(), self.get_types(),
+                only_regular=True, type_var_map=type_var_map,
+                disable_variance_functions=self.disable_variance_functions
+            )
+            if is_parameterized_func:
+                types = tu._get_available_types(t.get_type(), self.get_types(), True, False)
+                _, type_var_map = tu._compute_type_variable_assignments(
+                    t.type_parameters + func.type_parameters,
+                    types, type_var_map=type_var_map
+                )
+                params_map, func_type_var_map = tu.split_type_var_map(
+                    type_var_map, t.type_parameters, func.type_parameters)
+                targs = [
+                    params_map[t_param]
+                    for t_param in t.type_parameters
+                ]
+                t_type = t.get_type().new(targs)
+            else:
+                t_type, params_map = tu.instantiate_type_constructor(
+                    t.get_type(), self.get_types(),
+                    only_regular=True, type_var_map=t_type_var_map
+                )
+        else:
+            if is_parameterized_func:
+                func_type_var_map = tu.instantiate_parameterized_function(
+                    func.type_parameters, self.get_types(), only_regular=True,
+                    type_var_map=type_var_map)
+            t_type, params_map = t.get_type(), {}
+        return gu.AttrAccessInfo(t_type, params_map, func, func_type_var_map)
+
+    def _get_matching_trait_decls(self, 
+                                  fret_type: tp.Type,
+                                  subtype: bool) -> List[Tuple[ast.TraitDeclaration, tu.TypeVarMap, ast.FunctionDeclaration]]:
+        """ Get traits that have functions that return fret_type.
+        """
+        trait_decls = []
+        for t in self.context.get_traits(self.namespace).values():
+            for func in t.function_signatures + t.default_impls:
+                func_type = func.get_type()
+                if func_type == self.bt_factory.get_void_type():
+                    continue
+                is_comp, type_var_map = self._is_signature_compatible(func, fret_type, True, False)
+                if is_comp:
+                    trait_decls.append((t, type_var_map, func))
+        return trait_decls
+        
+    def _gen_matching_trait(self,
+                            fret_type: tp.Type,
+                            not_void=False) -> gu.AttrAccessInfo:
+        """Generate a trait that has a function that returns fret_type.
+        """
+        initial_namespace = self.namespace
+        trait_name = gu.gen_identifier('capitalize')
+        type_params = None
+        if fret_type.has_type_variables():
+            self.namespace = ast.GLOBAL_NAMESPACE + (trait_name,)
+            type_params, type_var_map, can_wildcard = self._create_type_params_from_etype(fret_type)
+            fret_type2 = tp.substitute_type(fret_type, type_var_map)
+        else:
+            type_var_map, fret_type2, can_wildcard = {}, fret_type, False
+        self.namespace = ast.GLOBAL_NAMESPACE
+        t = self.gen_trait_decl(fret_type=fret_type2, not_void=not_void, type_params=type_params, trait_name=trait_name)
+        self.namespace = initial_namespace
+        if t.is_parameterized():
+            type_map = {v: k for k, v in type_var_map.items()}
+            if fret_type2.is_primitive() and (fret_type2.box_type() == self.bt_factory.get_void_type()):
+                type_map = None
+            variance_choices = None
+            t_type, params_map = tu.instantiate_type_constructor(
+                t.get_type(), self.get_types(), type_var_map=type_map,
+                disable_variance_functions=self.disable_variance_functions,
+                variance_choices=variance_choices,
+                disable_variance=variance_choices is None
+            )
+        else:
+            t_type, params_map = t.get_type(), {}
+        for func in t.function_signatures + t.default_impls:
+            if self._is_sigtype_compatible(func, fret_type, params_map, True, False):
+                func_type_var_map = {}
+                if func.is_parameterized():
+                    func_type_var_map = tu.instantiate_parameterized_function(
+                        func.type_parameters, self.get_types(), only_regular=True, type_var_map=params_map)
+                return gu.AttrAccessInfo(t_type, params_map, func, func_type_var_map)
+        return None

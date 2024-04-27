@@ -636,7 +636,7 @@ class RustTranslator(BaseTranslator):
         return res
     
     @append_to
-    def visit_trait_impl(self, node):
+    def visit_impl(self, node):
         old_indent = self.indent
         self.indent += 2
         children = node.children()
@@ -646,11 +646,11 @@ class RustTranslator(BaseTranslator):
         functions_res = [children_res[i] for i, _ in enumerate(node.functions)]
         len_functions = len(node.functions)
         type_parameters_res = [children_res[i + len_functions] for i, _ in enumerate(node.type_parameters)]
-        res = "{indent}impl{params} {trait} for {struct} {\n".format(
+        res = "{indent}impl{params} {trait} for {struct} {{\n".format(
             indent = " "*old_indent,
             params = "<" + ", ".join(type_parameters_res) + ">" if type_parameters_res else "",
-            trait = self.get_type_name(node.trait), #??? check if correct
-            struct = self.get_type_name(node.struct) #??? check if correct
+            trait = self.get_type_name(node.trait.get_type()), #??? check if correct
+            struct = self.get_type_name(node.struct.get_type()) #??? check if correct
         )
         if functions_res:
             res += "\n".join(functions_res)

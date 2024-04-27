@@ -41,7 +41,7 @@ class ASTVisitor():
             ast.Block: self.visit_block,
             ast.StructDeclaration: self.visit_struct_decl,
             ast.TraitDeclaration: self.visit_trait_decl,
-            ast.TraitImpl: self.visit_trait_impl,
+            ast.Impl: self.visit_impl,
             ast.StructInstantiation: self.visit_struct_instantiation,
             ast.SelfParameter: self.visit_param_decl,
         }
