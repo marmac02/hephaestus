@@ -3302,7 +3302,7 @@ class RustGenerator(Generator):
         """
         initial_namespace = self.namespace
         impl_id = self._get_impl_id()
-        self.namespace += (impl_id,)
+        self.namespace = ast.GLOBAL_NAMESPACE
         if fret_type is not None:
             type_fun = self._get_matching_trait(fret_type)
             if not type_fun:
@@ -3321,6 +3321,16 @@ class RustGenerator(Generator):
                 struct = ut.random.choice(available_structs)
             else:
                 struct = self.gen_struct_decl()
+        self.namespace = initial_namespace + (impl_id,)
+        s_type = struct.get_type()
+        t_type = trait.get_type()
+        if struct.is_parameterized():
+            #if struct is parameterized instantiate it with random type
+            s_type, type_var_map = tu.instantiate_type_constructor(
+                struct.get_type(), self.get_types(),
+                only_regular=True, disable_variance_functions=self.disable_variance_functions,
+                disable_variance=True
+            )
         functions = []
         for func_decl in trait.function_signatures:
             func = deepcopy(func_decl)
@@ -3334,7 +3344,7 @@ class RustGenerator(Generator):
                 functions.append(func)
         struct.functions.extend(functions)
         trait.structs_that_impl.append(struct)
-        impl = ast.Impl(struct, trait, functions)
+        impl = ast.Impl(s_type, t_type, functions)
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, impl)
         self.namespace = initial_namespace
         return impl
