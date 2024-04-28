@@ -622,7 +622,8 @@ class RustTranslator(BaseTranslator):
         if children:
             receiver_expr = (
                 '({}).'.format(children_res[0])
-                if isinstance(node.expr, ast.BottomConstant)
+                if isinstance(node.expr, ast.BottomConstant) or
+                   isinstance(node.expr, ast.StructInstantiation)
                 else children_res[0] + '.'
             )
         else:
@@ -649,8 +650,8 @@ class RustTranslator(BaseTranslator):
         res = "{indent}impl{params} {trait} for {struct} {{\n".format(
             indent = " "*old_indent,
             params = "<" + ", ".join(type_parameters_res) + ">" if type_parameters_res else "",
-            trait = self.get_type_name(node.trait.get_type()), #??? check if correct
-            struct = self.get_type_name(node.struct.get_type()) #??? check if correct
+            trait = self.get_type_name(node.trait), #??? check if correct
+            struct = self.get_type_name(node.struct) #??? check if correct
         )
         if functions_res:
             res += "\n".join(functions_res)

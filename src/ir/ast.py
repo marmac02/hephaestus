@@ -1581,8 +1581,8 @@ class TraitDeclaration(Declaration):
 
 class Impl(Declaration):
     def __init__(self, 
-                 struct: types.StructType, 
-                 trait: types.TraitType,
+                 struct: types.Type, 
+                 trait: types.Type,
                  functions: List[FunctionDeclaration] = [], #available functions that are implemented for this struct
                  type_parameters: List[types.TypeParameter] = []):
         self.name = "impl"
