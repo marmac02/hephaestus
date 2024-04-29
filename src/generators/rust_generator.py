@@ -38,7 +38,7 @@ class RustGenerator(Generator):
         self.namespace = ('global',)
         self.enable_pecs = not language == 'kotlin'
         self.disable_variance_functions = True #disabled for now
-        self.impl_count = 0
+        self._field_vars = {} #maps impl block ids to available field variables
 
         # This flag is used for Java lambdas where local variables references
         # must be final.
@@ -1262,7 +1262,8 @@ class RustGenerator(Generator):
                 variables))
         if self._inside_inner_function: # Variables declared in the inner function or globals for Rust
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
-                        
+        else:
+            variables = list(variables) + self._get_field_vars()
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
         if subtype:
@@ -1275,6 +1276,14 @@ class RustGenerator(Generator):
                                       subtype=subtype, exclude_var=True)
         varia = ut.random.choice([v.name for v in variables])
         return ast.Variable(varia)
+
+    def _get_field_vars(self) -> List[ast.VariableDeclaration]:
+        """ Get all field variables accessible in the current impl block. """
+        for ns in self.namespace:
+            if ns.startswith('impl'):
+                if ns in self._field_vars.keys():
+                    return self._field_vars[ns]
+        return []
 
     def gen_array_expr(self,
                        expr_type: tp.Type,
@@ -3301,7 +3310,6 @@ class RustGenerator(Generator):
               trait: trait whose functions are to be implemented.
         """
         initial_namespace = self.namespace
-        impl_id = self._get_impl_id()
         self.namespace = ast.GLOBAL_NAMESPACE
         if fret_type is not None:
             type_fun = self._get_matching_trait(fret_type)
@@ -3321,9 +3329,11 @@ class RustGenerator(Generator):
                 struct = ut.random.choice(available_structs)
             else:
                 struct = self.gen_struct_decl()
+        impl_id = self._get_impl_id(trait.name, struct.name)
         self.namespace = initial_namespace + (impl_id,)
         s_type = struct.get_type()
         t_type = trait.get_type()
+        type_var_map = {}
         if struct.is_parameterized():
             #if struct is parameterized instantiate it with random type
             s_type, type_var_map = tu.instantiate_type_constructor(
@@ -3331,6 +3341,16 @@ class RustGenerator(Generator):
                 only_regular=True, disable_variance_functions=self.disable_variance_functions,
                 disable_variance=True
             )
+        
+        #Adding fields to _fields_vars so that they are accessible in impl block
+        field_vars_list = []
+        for field in struct.fields:
+            field_type = tp.substitute_type(field.get_type(), type_var_map)
+            field_var_name ="self." + field.name
+            #create a virtual variable declaration for each struct field
+            field_vars_list.append(ast.VariableDeclaration(name=field_var_name, expr=None, var_type=field_type))
+        self._field_vars[impl_id] = field_vars_list
+
         functions = []
         for func_decl in trait.function_signatures:
             func = deepcopy(func_decl)
@@ -3349,10 +3369,9 @@ class RustGenerator(Generator):
         self.namespace = initial_namespace
         return impl
 
-    def _get_impl_id(self):
+    def _get_impl_id(self, trait_name, struct_name):
         #create a unique identifier for impl block
-        self.impl_count += 1
-        return "impl" + str(self.impl_count)
+        return "impl_" + trait_name + "_" + struct_name
 
     def _get_matching_trait(self, fret_type: tp.Type):
         trait_decls = self._get_matching_trait_decls(fret_type, False)
