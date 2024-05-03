@@ -1482,6 +1482,9 @@ class StructDeclaration(Declaration):
     def get_all_fields(self) -> Set[FieldDeclaration]:
         return set(self.fields)
 
+    def get_callable_functions(self) -> Set[FunctionDeclaration]:
+        return set(self.functions)
+
     
 
 class StructInstantiation(New):
@@ -1580,12 +1583,13 @@ class TraitDeclaration(Declaration):
 
 
 class Impl(Declaration):
-    def __init__(self, 
+    def __init__(self,
+                 impl_id: str,
                  struct: types.Type, 
                  trait: types.Type,
                  functions: List[FunctionDeclaration] = [], #available functions that are implemented for this struct
                  type_parameters: List[types.TypeParameter] = []):
-        self.name = "impl"
+        self.name = impl_id
         self.struct = struct
         self.trait = trait
         self.functions = functions
