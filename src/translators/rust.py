@@ -230,11 +230,11 @@ class RustTranslator(BaseTranslator):
             args = []
         res = "{indent}{left_bracket}{receiver}{name}{type_args}{right_bracket}({args})".format(
             indent=" " * self.indent,
-            left_bracket="(" if receiver_expr else "",
+            left_bracket="", #"(" if receiver_expr else "",
             receiver=receiver_expr,
             name=func,
             type_args=type_args,
-            right_bracket=")" if receiver_expr else "",
+            right_bracket="", #")" if receiver_expr else "",
             args=", ".join(args)
         )
         return res

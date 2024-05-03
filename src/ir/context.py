@@ -11,7 +11,6 @@ class Context():
         # A lookup from declarations to namespaces
         self._namespaces = {}
         self._all_func_decls = {}
-        self.impl_count = 0
 
     def _add_entity(self, namespace, entity, name, value):
         if namespace in self._context:
@@ -67,9 +66,8 @@ class Context():
         self._add_entity(namespace, 'traits', trait_name, trait)
         self._add_entity(namespace, 'decls', trait_name, trait)
 
-    def add_impl(self, namespace, _, impl):
-        self.impl_count += 1
-        self._add_entity(namespace, 'decls', "Impl"+str(self.impl_count), impl)
+    def add_impl(self, namespace, impl_id, impl):
+        self._add_entity(namespace, 'decls', impl_id, impl)
 
     def remove_type(self, namespace, type_name):
         self._remove_entity(namespace, 'types', type_name)
