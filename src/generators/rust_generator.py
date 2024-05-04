@@ -943,6 +943,7 @@ class RustGenerator(Generator):
             subtype and expr_type != self.bt_factory.get_void_type()
             and ut.random.bool()
         )
+
         expr_type = expr_type or self.select_type()
         if find_subtype:
             subtypes = tu.find_subtypes(expr_type, self.get_types(),
@@ -1013,16 +1014,6 @@ class RustGenerator(Generator):
                                   self.generate_expr(var_decl.get_type(),
                                                      only_leaves, subtype))
         receiver, variable = ut.random.choice(variables)
-
-        '''
-        if receiver is None:
-            print("Receiver is None")
-        else:
-            print("Receiver: ", receiver.receiver_expr)
-        print( "Variable: ", variable.name)
-        print()
-        '''
-
         self.depth = initial_depth
         gen_bottom = (
             variable.get_type().is_wildcard() or
@@ -1126,11 +1117,12 @@ class RustGenerator(Generator):
         """Generate a field access expression.
 
         Args:
-            expr_type: The value that the field access should return.
+            expr_type: The type of the value that the field access should return.
             only_leaves: do not generate new leaves except from `expr`.
             subtype: The type of the generated expression could be a subtype
                 of `expr_type`.
         """
+        log(self.logger, "Generating field access with type {}".format(etype))
         initial_depth = self.depth
         self.depth += 1
         objs = self._get_matching_objects(etype, subtype, 'fields')
@@ -1726,7 +1718,6 @@ class RustGenerator(Generator):
             only_leaves: do not generate new leaves except from `expr`.
             subtype: The returned type could be a subtype of `etype`.
         """
-
         log(self.logger, "Generating function call of type {}".format(etype))
         funcs = self._get_matching_function_declarations(etype, subtype)
         if not funcs:
@@ -2546,6 +2537,7 @@ class RustGenerator(Generator):
         Returns:
             ast.Block or ast.Expr
         """
+        log(self.logger, "Generating function body with return type: {}".format(ret_type))
         expr_type = (
             self.select_type(ret_types=False)
             if ret_type == self.bt_factory.get_void_type()
@@ -2699,7 +2691,6 @@ class RustGenerator(Generator):
         """
         if attr_name == 'fields':
             return struct_decl.fields
-        print(struct_decl.name, struct_decl.functions)
         return struct_decl.functions
 
     def _get_matching_function_declarations(self,
@@ -3140,14 +3131,19 @@ class RustGenerator(Generator):
         if not etype.has_type_variables():
             return []
 
+        #added for now, probably wrong
+        if isinstance(etype, tp.TypeConstructor):
+            type_map = {k: k for k in etype.type_parameters}
+            return etype.type_parameters, type_map, False
+        
         if isinstance(etype, tp.TypeParameter):
             type_params = self.gen_type_params(count=1)
             type_params[0].bound = etype.get_bound_rec(self.bt_factory)
             type_params[0].variance = tp.Invariant
             return type_params, {etype: type_params[0]}, True
-
+        
         # the given type is parameterized
-        assert isinstance(etype, (tp.ParameterizedType, tp.WildCardType))
+        #assert isinstance(etype, (tp.ParameterizedType, tp.WildCardType))
         
         type_vars = etype.get_type_variables(self.bt_factory)
         type_params = self.gen_type_params(
@@ -3356,6 +3352,10 @@ class RustGenerator(Generator):
               Returns:
                 
         """
+        if isinstance(fret_type, tp.TypeConstructor):
+            fret_type, _ = tu.instantiate_type_constructor(
+                fret_type, self.get_types(),
+                only_regular=True, disable_variance_functions=self.disable_variance_functions)
         initial_namespace = self.namespace
         self.namespace = ast.GLOBAL_NAMESPACE
         if fret_type is not None:
@@ -3393,7 +3393,6 @@ class RustGenerator(Generator):
                 only_regular=True, disable_variance_functions=self.disable_variance_functions,
                 disable_variance=True
             )
-        
         #Adding fields to _fields_vars so that they are accessible in impl block
         field_vars_list = []
         for field in struct.fields:
@@ -3417,6 +3416,10 @@ class RustGenerator(Generator):
         struct.functions.extend(functions)
         trait.structs_that_impl.append(struct)
         impl = ast.Impl(impl_id, s_type, t_type, functions)
+        
+        msg = ("Creating impl {}").format(impl_id)
+        log(self.logger, msg)
+
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, impl)
         self.namespace = initial_namespace
         return (struct, type_var_map)
