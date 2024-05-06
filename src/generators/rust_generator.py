@@ -1689,14 +1689,13 @@ class RustGenerator(Generator):
         Returns:
             A function call.
         """
-        '''
-       if ut.random.bool(cfg.prob.func_ref_call):
+        if ut.random.bool(cfg.prob.func_ref_call):
             ref_call = self._gen_func_call_ref(etype, only_leaves, subtype)
             if ref_call:
                 return ref_call
             # NOTE we could use _gen_func_call to generate function references
             # for producing function calls, but then we should always cast them.
-        '''
+        
         return self._gen_func_call(etype, only_leaves, subtype)
 
     # gen_func_call Where
