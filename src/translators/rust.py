@@ -230,11 +230,11 @@ class RustTranslator(BaseTranslator):
             args = []
         res = "{indent}{left_bracket}{receiver}{name}{type_args}{right_bracket}({args})".format(
             indent=" " * self.indent,
-            left_bracket="",#"(" if receiver_expr else "",
+            left_bracket="(" if node.is_ref_call and receiver_expr else "",
             receiver=receiver_expr,
             name=func,
             type_args=type_args,
-            right_bracket="",#")" if receiver_expr else "",
+            right_bracket=")" if node.is_ref_call and receiver_expr else "",
             args=", ".join(args)
         )
         return res
@@ -390,11 +390,6 @@ class RustTranslator(BaseTranslator):
         type_annotation = " as Vec<{}>".format(self.get_type_name(array_type.type_args[0])) \
             if len(children_res) == 0 else ""
         res = "vec![" + ", ".join(children_res) + "]" + type_annotation
-
-        #temporary `fix` to handle empty vec![] change this
-        #if len(children_res) == 0 and self._parent_is_block():
-        #    res = "unimplemented!()"
-        
         return res
     
     @append_to
@@ -633,6 +628,7 @@ class RustTranslator(BaseTranslator):
             receiver=receiver_expr,
             name=node.field
         )
+        #function call on struct field requires bracketing
         self.indent = old_indent
         return res
     
