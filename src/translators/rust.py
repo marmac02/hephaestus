@@ -588,12 +588,11 @@ class RustTranslator(BaseTranslator):
             c.accept(self)
         self.indent = old_indent
         children_res = self.pop_children_res(children)
-        #type_args = (
-        #    "::<" + ", ".join([self.get_type_name(t) for t in node.type_args]) + ">"
-        #    if node.type_args
-        #    else ""
-        #)
-        type_args = ""
+        type_args = (
+            "::<" + ", ".join([self.get_type_name(t) for t in node.stype.type_args]) + ">"
+            if node.stype.is_parameterized() and node.stype.type_args
+            else ""
+        )
         field_names = node.field_names
         res = "{indent}{name}{type_args} {{ ".format(
             indent=" "*self.indent,
