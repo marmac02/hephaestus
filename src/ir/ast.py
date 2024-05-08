@@ -1504,7 +1504,13 @@ class StructInstantiation(New):
         self.field_exprs = children
 
     def __str__(self):
-        pass #TODO
+        return "{} {{\n  {}\n}}".format(
+            self.struct_name,
+            "\n  ".join(
+                "{} = {}".format(self.field_names[i], self.field_exprs[i])
+                for i in range(len(self.field_names))
+            )
+        )
 
     def is_equal(self, other):
         if isinstance(other, StructInstantiation):
