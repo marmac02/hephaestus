@@ -1489,10 +1489,12 @@ class StructDeclaration(Declaration):
 
 class StructInstantiation(New):
     def __init__(self,
-                 struct_name: str, 
+                 struct_name: str,
+                 stype: types.Type, 
                  field_names: List[str] = [], 
                  field_exprs: List[Expr] = []):
         self.struct_name = struct_name
+        self.stype = stype
         self.field_names = field_names
         self.field_exprs = field_exprs
 
