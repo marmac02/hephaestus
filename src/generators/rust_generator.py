@@ -2304,7 +2304,8 @@ class RustGenerator(Generator):
                         count: int=None,
                         with_variance=False,
                         blacklist: List[str]=None,
-                        for_function=False) -> List[tp.TypeParameter]:
+                        for_function=False,
+                        add_to_context=True) -> List[tp.TypeParameter]:
         """Generate a list containing type parameters
 
         Args:
@@ -2313,6 +2314,7 @@ class RustGenerator(Generator):
             with_variance: enable variance
             blacklist: a list of type parameter names
             for_function: create type parameters for parameterized functions
+            add_to_context: add type params to the context (False if called for impl block)
         """
         if not count and ut.random.bool():
             return []
@@ -2350,7 +2352,8 @@ class RustGenerator(Generator):
                     bound = bound.box_type()
             type_param = tp.TypeParameter(name, variance=variance, bound=bound)
             # Add type parameter to context.
-            self.context.add_type(self.namespace, type_param.name, type_param)
+            if add_to_context:
+                self.context.add_type(self.namespace, type_param.name, type_param)
             type_params.append(type_param)
         return type_params
 
@@ -3393,11 +3396,16 @@ class RustGenerator(Generator):
             ttype, type_var_map = obj.get_type(), {}
             if obj.is_parameterized():
                 ttype, type_var_map = tu.instantiate_type_constructor(
-                    obj.get_type(), self.get_types(),
+                    obj.get_type(), self.get_types() + impl_type_params,
                     only_regular=True, disable_variance_functions=self.disable_variance_functions,
                     disable_variance=True
                 )
             return ttype, type_var_map
+
+        #Generate candidate type parameters
+        #Type params used in final declaration of impl block will be a subset of these,
+        #depending on instantiations of struct and trait
+        impl_type_params = self.gen_type_params(add_to_context=False)
 
         initial_namespace = self.namespace
         self.namespace = ast.GLOBAL_NAMESPACE
@@ -3413,7 +3421,6 @@ class RustGenerator(Generator):
                 trait = ut.random.choice(available_traits)
             else:
                 trait = self.gen_trait_decl()
-        t_type, trait_map = _inst_type_constructor(trait)
         
         #find or generate struct
         if struct_name is None:
@@ -3423,12 +3430,18 @@ class RustGenerator(Generator):
             else:
                 struct = ut.random.choice(structs_in_context)
             s_type, type_var_map = _inst_type_constructor(struct)
-            if not self._is_impl_allowed(struct, type_var_map, trait, trait_map):
+            if not self._is_impl_allowed(struct, type_var_map, trait):
                 struct = self.gen_struct_decl() #if not allowed, just generate a fresh struct
                 s_type, type_var_map = _inst_type_constructor(struct)
         else:
             struct = self.gen_struct_decl(struct_name)
             s_type, type_var_map = _inst_type_constructor(struct)
+
+        #Type parameters used in final declaration of impl block are the ones that are also used in struct type instantiation
+        s_type_params = s_type.type_args if s_type.is_parameterized() else []
+        impl_type_params = [t_param for t_param in impl_type_params if t_param in s_type_params]
+        t_type, trait_map = _inst_type_constructor(trait) #Instantiate trait type with available type params
+
         struct_name = struct.name
         impl_id = self._get_impl_id(str(t_type), str(s_type))
         self.namespace = ast.GLOBAL_NAMESPACE + (impl_id,)
@@ -3438,6 +3451,10 @@ class RustGenerator(Generator):
             self._impls[struct_name] = []
         self._impls[struct_name].append((struct, type_var_map, trait, trait_map))
 
+        #Adding type parameters into context, so that they can be used in generated functions
+        for t_param in impl_type_params:
+            self.context.add_type(self.namespace, t_param.name, t_param)
+        
         #Adding fields to _fields_vars so that they are accessible in impl block
         field_vars_list = []
         for field in struct.fields:
@@ -3459,9 +3476,8 @@ class RustGenerator(Generator):
                 new_func.body = self._gen_func_body(new_func.get_type())
                 functions.append(new_func)
         
-
         trait.structs_that_impl.append(struct)
-        impl = ast.Impl(impl_id, s_type, t_type, functions)
+        impl = ast.Impl(impl_id, s_type, t_type, functions, impl_type_params)
         
         msg = ("Creating impl {}").format(impl_id)
         log(self.logger, msg)
@@ -3470,6 +3486,7 @@ class RustGenerator(Generator):
         self.namespace = initial_namespace
         
         return (struct, type_var_map)
+
 
     def _update_func_decl(self, func_decl: ast.FunctionDeclaration, t_map: Dict):
         """Update the type of a function declaration with the given type map.
@@ -3486,7 +3503,7 @@ class RustGenerator(Generator):
         """ create a unique identifier for impl block """
         return "impl_" + trait + "_" + struct
 
-    def _is_impl_allowed(self, struct_decl, struct_type_map, trait_decl, trait_type_map):
+    def _is_impl_allowed(self, struct_decl, struct_type_map, trait_decl):
         """ check if there are conflicting implementations 
             current check policy is strict: one trait impl for a particular struct type
         """
