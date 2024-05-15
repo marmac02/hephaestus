@@ -3492,7 +3492,7 @@ class RustGenerator(Generator):
             ttype, type_var_map = obj.get_type(), {}
             if obj.is_parameterized():
                 ttype, type_var_map = tu.instantiate_type_constructor(
-                    obj.get_type(), impl_type_params + [ut.random.choice(self.get_types())],
+                    obj.get_type(), impl_type_params + self.get_types(),
                     only_regular=True, disable_variance_functions=self.disable_variance_functions,
                     disable_variance=True
                 )
