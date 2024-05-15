@@ -26,7 +26,8 @@ class RustGenerator(Generator):
     def __init__(self,
                  language=None,
                  options={},
-                 logger=None,):
+                 logger=None,
+                 seed=None):
         assert language is not None, "You must specify the language"
         self.language = language
         self.logger: Logger = logger
@@ -40,7 +41,7 @@ class RustGenerator(Generator):
         self.disable_variance_functions = True #disabled for now
         self._field_vars = {} #maps impl block ids to available field variables
 
-        #Map describing impl blocks. It maps struct_names to tuples: struct_name -> ([(struct_decl, struct_type_var_map, trait_decl, trait_type_var_map)])
+        #Map describing impl blocks. It maps struct_names to tuples
         self._impls = {}
 
         # This flag is used for Java lambdas where local variables references
@@ -1199,10 +1200,7 @@ class RustGenerator(Generator):
         for attr in self._get_struct_attributes(s, 'fields'):
             if not self._is_sigtype_compatible(attr, etype, params_map, signature, False):
                 continue
-            func_type_var_map = {}
-            if isinstance(attr, ast.FunctionDeclaration) and attr.is_parameterized():
-                raise ValueError("Parameterized functions implemented by structs are not supported yet.")
-            return gu.AttrAccessInfo(s_type, params_map, attr, func_type_var_map)
+            return gu.AttrAccessInfo(s_type, params_map, attr, {})
         return None
 
     def get_matching_struct(self,
@@ -1901,7 +1899,6 @@ class RustGenerator(Generator):
         for struct in self.context.get_structs(self.namespace).values():
             if struct.name == etype.name:
                 s_decl = struct
-
         '''if isinstance(etype, tp.ParameterizedType):
             etype = etype.to_variance_free()
         else:
@@ -1919,7 +1916,7 @@ class RustGenerator(Generator):
         con = news.get(etype)
         if con is not None:
             return con
-
+        
         #instantiating a new struct in Rust
         #if self.language == 'rust' and isinstance(etype, tp.SimpleClassifier):
         if s_decl is None or etype.name in self._blacklisted_structs:
@@ -2691,7 +2688,8 @@ class RustGenerator(Generator):
 
     def _get_struct_attributes(self, struct_decl, attr_name, type_var_map=None):
         """Get attributes of a struct.
-
+            If we want to get functions implemented for that struct,
+            we need to pass type_var_map (to instantiate the function types correctly).
         Args:
             struct_decl: struct declaration
             attr_name: 'fields' or 'functions'
@@ -2703,14 +2701,61 @@ class RustGenerator(Generator):
         if not struct_decl.name in self._impls.keys():
             return []
         funcs = []
-        for (s_decl, s_map, t_decl, t_map) in self._impls[struct_decl.name]:
+        for (impl, s_map, t_map) in self._impls[struct_decl.name]:
+            is_compatible, updated_map = self._is_impl_compatible(s_map, type_var_map)
+            if not is_compatible:
+                continue
+            for f in impl.functions:
+                updated_f = self._update_func_decl(f, updated_map)
+                funcs.append(updated_f)
+            '''
+            if not impl.type_parameters:
+                if s_map == type_var_map:
+                    funcs.extend(impl.functions)
+            else:
+                is_compatible = True
+                impl_type_map = {}
+                for key in s_map.keys():
+                    curr_inst = s_map[key]
+                    #Fix this: conflicting instantiations (I, I and i32, f64)
+                    if not curr_inst in impl.type_parameters and curr_inst != type_var_map[key]:
+                        is_compatible = False
+                        break
+                    if curr_inst in impl.type_parameters:
+                        impl_type_map[curr_inst] = type_var_map[key]
+                if is_compatible:
+                    for f in impl.functions:
+                        updated_f = self._update_func_decl(f, impl_type_map)
+                        funcs.append(updated_f)
             if s_map == type_var_map:
                 curr_funcs = t_decl.function_signatures + t_decl.default_impls
                 updated_funcs = []
                 for f in curr_funcs:
                     updated_funcs.append(self._update_func_decl(f, t_map))
                 funcs += updated_funcs
+            '''
         return funcs
+
+    def _is_impl_compatible(self, impl_map, type_var_map):
+        updated_map = {}
+        for key in impl_map.keys():
+            curr_inst = impl_map[key]
+            if not curr_inst.has_type_variables():
+                if curr_inst != type_var_map[key]:
+                    return False, {}
+            else:
+                type_map = tu.unify_types(type_var_map[key], curr_inst, self.bt_factory, same_type=False)
+                #print(self.bt_factory)
+                #print(type(curr_inst), type(type_var_map[key]), type_map)
+                if not type_map:
+                    return False, {}
+                for (t_param, t) in type_map.items():
+                    if t_param in updated_map.keys() and updated_map[t_param] != t:
+                        return False, {}
+                    updated_map[t_param] = t
+                
+        return True, updated_map
+                
 
     def _get_matching_function_declarations(self,
                                             etype: tp.Type,
@@ -2788,15 +2833,33 @@ class RustGenerator(Generator):
 
     def _get_struct_with_matching_function(self,
                                              etype: tp.Type) -> gu.AttrAccessInfo:
-        """ Get all structs that implement a function that returns etype """
-        #for now unparameterized traits with unparam functions are supported
+        """ Get a struct that implements a function that returns etype """
         structs = []
         for struct_name, lst in self._impls.items():
-            for (s_decl, s_map, t_decl, t_map) in lst:
-                for f in t_decl.function_signatures + t_decl.default_impls:
-                    new_f = self._update_func_decl(f, t_map)
-                    if f.get_type() == etype:
-                        structs.append(gu.AttrAccessInfo(s_decl.get_type(), s_map, new_f, None))
+            for (impl, s_map, t_map) in lst:
+                
+                #instantiate impl type params randomly
+                impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
+
+                for f in impl.functions:
+                    if f.get_type() == self.bt_factory.get_void_type():
+                        continue
+                    if not f.get_type().has_type_variables() or etype == self.bt_factory.get_void_type():
+                        if f.get_type() != etype: #types do not match
+                            continue
+                    else:
+                        type_map = tu.unify_types(etype, f.get_type(), self.bt_factory, same_type=False)
+                        if not type_map: #types are not compatible
+                            continue
+                        impl_type_map.update(type_map)
+                    #At this point, the function has the matching/compatible return type
+                    updated_s_map = {}
+                    for key in s_map.keys():
+                        curr_inst = deepcopy(s_map[key])
+                        updated_s_map[key] = tp.substitute_type(curr_inst, impl_type_map)
+                    updated_f = self._update_func_decl(f, impl_type_map)
+                    updated_s_type = tp.substitute_type(impl.struct, impl_type_map)
+                    structs.append(gu.AttrAccessInfo(updated_s_type, updated_s_map, updated_f, None))
         if not structs:
             return None
         return ut.random.choice(structs)
@@ -2820,7 +2883,8 @@ class RustGenerator(Generator):
             ut.random.bool() and
             not not_struct_func and
             not etype.is_type_var() and #functions returning parameterized types are not yet supported for trait/struct functions
-            not etype.is_parameterized()
+            not etype.is_parameterized() and
+            not etype == self.bt_factory.get_void_type()
         )
         if not gen_call_on_struct:
             initial_namespace = self.namespace
@@ -2851,6 +2915,7 @@ class RustGenerator(Generator):
                 func.name, etype, func_type_var_map)
             log(self.logger, msg)
             return gu.AttrAccessInfo(None, {}, func, func_type_var_map)
+        #Only non-parameterized types are supported
         return self.gen_matching_impl(etype)
 
     def _get_matching_class(self,
@@ -3257,6 +3322,7 @@ class RustGenerator(Generator):
         fields = self.gen_struct_fields(field_type) #fields added to fields list in _add_node_to_parent call of gen_field_decl
         used_type_params = self._get_used_type_params(fields)
         type_params = [t_param for t_param in type_params if t_param in used_type_params] #remove unused type parameters
+        struct.fields = fields
         struct.type_parameters = type_params
         self._blacklisted_structs.remove(struct_name)
         self.namespace = initial_namespace
@@ -3355,23 +3421,53 @@ class RustGenerator(Generator):
             funcs.append(func)
         return funcs
 
+    def _update_type_map(self, type_map, impl_type_params, fret_type):
+        """ Swap type parameters from Impl block with concrete types
+            Args:
+                type_map: type map of the struct
+                impl_type_params: type parameters of the impl block
+                fret_type: return type a function should have
+        """
+
+    def gen_matching_impl(self, fret_type: tp.Type) -> gu.AttrAccessInfo:
+        if fret_type.is_parameterized():
+            trait = self._gen_matching_trait(fret_type, True)
+            struct = self.gen_struct_decl(field_type=fret_type)
+        impl, struct_decl, type_var_map = self.gen_impl(fret_type)
+        return self._get_struct_with_matching_function(fret_type)
+
+    '''
     def gen_matching_impl(self,
                           fret_type: tp.Type) -> gu.AttrAccessInfo:
         """ Generate an impl block that implements a trait with a function that returns `fret_type`.
             Return AttrAccessInfo to that function
         """
-        struct_decl, type_var_map = self.gen_impl(fret_type)
-        for (_, s_map, t_decl, t_map) in self._impls[struct_decl.name]:
+        impl, struct_decl, type_var_map = self.gen_impl(fret_type)
+        for (impl, s_map, t_map) in self._impls[struct_decl.name]:
             if s_map == type_var_map:
                 funcs = t_decl.function_signatures + t_decl.default_impls
+
+                impl_type_map = {}
+                for t_param in impl.type_parameters:
+                    t_con = tp.TypeConstructor(t_param.name, [t_param])
+                    _, hlp_map = tu.instantiate_type_constructor(t_con, self.get_types(), 
+                        disable_variance_functions=self.disable_variance_functions, disable_variance=True)
+                    impl_type_map[t_param] = hlp_map[t_param]
+                s_map_copy = {}
+                t_map_copy = {}
+                for key in s_map.keys():
+                    s_map_copy[key] = s_map[key] if not s_map[key] in impl.type_parameters else impl_type_map[s_map[key]]
+                for key in t_map.keys():
+                    t_map_copy[key] = t_map[key] if not t_map[key] in impl.type_parameters else impl_type_map[t_map[key]]
+
                 for func in funcs:
                     new_func = self._update_func_decl(func, t_map)
                     if new_func.get_type() == fret_type:
                         #for now parameterized trait functions not supported
-                        return gu.AttrAccessInfo(struct_decl.get_type(), type_var_map, new_func, {})
+                        return gu.AttrAccessInfo(struct_decl.get_type(), t_map_copy, new_func, {})
         
         return None
-
+    '''
     def gen_impl(self,
                  fret_type: tp.Type=None,
                  not_void: bool=False,
@@ -3379,7 +3475,7 @@ class RustGenerator(Generator):
                  signature: tp.ParameterizedType=None, #remove this???
                  struct_name: str=None,
                  trait: ast.TraitDeclaration=None,
-                 ) -> Tuple[ast.StructDeclaration, Dict]:
+                 ) -> Tuple[ast.Impl, ast.StructDeclaration, Dict]:
         """Generate an impl block.
            Args:
               fret_type: if provided, at least one function will return this type.
@@ -3396,7 +3492,7 @@ class RustGenerator(Generator):
             ttype, type_var_map = obj.get_type(), {}
             if obj.is_parameterized():
                 ttype, type_var_map = tu.instantiate_type_constructor(
-                    obj.get_type(), self.get_types() + impl_type_params,
+                    obj.get_type(), impl_type_params + [ut.random.choice(self.get_types())],
                     only_regular=True, disable_variance_functions=self.disable_variance_functions,
                     disable_variance=True
                 )
@@ -3405,7 +3501,7 @@ class RustGenerator(Generator):
         #Generate candidate type parameters
         #Type params used in final declaration of impl block will be a subset of these,
         #depending on instantiations of struct and trait
-        impl_type_params = self.gen_type_params(add_to_context=False)
+        impl_type_params = self.gen_type_params(add_to_context=False, count=3)
 
         initial_namespace = self.namespace
         self.namespace = ast.GLOBAL_NAMESPACE
@@ -3421,7 +3517,6 @@ class RustGenerator(Generator):
                 trait = ut.random.choice(available_traits)
             else:
                 trait = self.gen_trait_decl()
-        
         #find or generate struct
         if struct_name is None:
             structs_in_context = list(self.context.get_structs(self.namespace).values())
@@ -3436,7 +3531,6 @@ class RustGenerator(Generator):
         else:
             struct = self.gen_struct_decl(struct_name)
             s_type, type_var_map = _inst_type_constructor(struct)
-
         #Type parameters used in final declaration of impl block are the ones that are also used in struct type instantiation
         s_type_params = s_type.type_args if s_type.is_parameterized() else []
         impl_type_params = [t_param for t_param in impl_type_params if t_param in s_type_params]
@@ -3447,9 +3541,10 @@ class RustGenerator(Generator):
         self.namespace = ast.GLOBAL_NAMESPACE + (impl_id,)
 
         #Adding impl block info to _impls
+        impl = ast.Impl(impl_id, s_type, t_type, [], impl_type_params)
         if not struct_name in self._impls.keys():
             self._impls[struct_name] = []
-        self._impls[struct_name].append((struct, type_var_map, trait, trait_map))
+        self._impls[struct_name].append((impl, type_var_map, trait_map))
 
         #Adding type parameters into context, so that they can be used in generated functions
         for t_param in impl_type_params:
@@ -3466,18 +3561,24 @@ class RustGenerator(Generator):
         
         functions = []
         for func_decl in trait.function_signatures:
+            prev_ns = self.namespace
+            self.namespace += (func_decl.name,)
             new_func = self._update_func_decl(func_decl, trait_map)
             new_func.body = self._gen_func_body(new_func.get_type())
             functions.append(new_func)
+            self.namespace = prev_ns
         for func_decl in trait.default_impls:
+            prev_ns = self.namespace
+            self.namespace += (func_decl.name,)
             new_func = self._update_func_decl(func_decl, trait_map)
             if ut.random.bool():
                 #decide randomly to override the default implementation
                 new_func.body = self._gen_func_body(new_func.get_type())
                 functions.append(new_func)
-        
+            self.namespace = prev_ns
+
         trait.structs_that_impl.append(struct)
-        impl = ast.Impl(impl_id, s_type, t_type, functions, impl_type_params)
+        impl.functions = functions
         
         msg = ("Creating impl {}").format(impl_id)
         log(self.logger, msg)
@@ -3485,7 +3586,7 @@ class RustGenerator(Generator):
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, impl)
         self.namespace = initial_namespace
         
-        return (struct, type_var_map)
+        return (impl, struct, type_var_map)
 
 
     def _update_func_decl(self, func_decl: ast.FunctionDeclaration, t_map: Dict):
@@ -3505,13 +3606,21 @@ class RustGenerator(Generator):
 
     def _is_impl_allowed(self, struct_decl, struct_type_map, trait_decl):
         """ check if there are conflicting implementations 
-            current check policy is strict: one trait impl for a particular struct type
+            current check policy is strict: no two impl blocks with the same trait name
+            and conflicting struct instantiations are allowed
         """
         if not struct_decl.name in self._impls.keys():
             return True
-        for (s_decl, s_type_map, t_decl, t_type_map) in self._impls[struct_decl.name]:
-            if t_decl.name == trait_decl.name and s_type_map == struct_type_map:
-                return False
+        for (impl, s_map, t_map) in self._impls[struct_decl.name]:
+            if impl.trait.name == trait_decl.name:
+                diff = False #we need different instantiation with concrete types for at least one type parameter
+                for key in s_map.keys():
+                    if not s_map[key].has_type_variables() and \
+                    not struct_type_map[key].has_type_variables() and \
+                    s_map[key] != struct_type_map[key]:
+                        diff = True
+                if not diff:
+                    return False
         return True
 
     def _get_matching_trait(self, fret_type: tp.Type):
