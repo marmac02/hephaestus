@@ -154,6 +154,10 @@ class Block(Node):
 
 
 class Declaration(Node):
+
+    def __init__(self):
+        self.is_moved = False
+
     def get_type(self):
         raise NotImplementedError('get_type() must be implemented')
 
@@ -170,6 +174,7 @@ class VariableDeclaration(Declaration):
                  is_final: bool = True,
                  var_type: types.Type = None,
                  inferred_type: types.Type = None):
+        super().__init__()
         self.name = name
         self.expr = expr
         self.is_final = is_final
@@ -329,6 +334,7 @@ class ParameterDeclaration(Declaration):
                  param_type: types.Type,
                  vararg: bool = False,
                  default: Expr = None):
+        super().__init__()
         self.name = name
         self.param_type = param_type
         self.vararg = vararg
