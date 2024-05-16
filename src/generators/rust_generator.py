@@ -955,12 +955,14 @@ class RustGenerator(Generator):
         """
         if gen_bottom:
             return ast.BottomConstant(None)
+        '''
+        subtypes are irrelevant for now (will be when trait types introduced)
         find_subtype = (
             expr_type and
             subtype and expr_type != self.bt_factory.get_void_type()
             and ut.random.bool()
         )
-        expr_type = expr_type or self.select_type()
+        
         if find_subtype:
             subtypes = tu.find_subtypes(expr_type, self.get_types(),
                                         include_self=True, concrete_only=True)
@@ -968,6 +970,9 @@ class RustGenerator(Generator):
             expr_type = ut.random.choice(subtypes)
             msg = "Found subtype of {}: {}".format(old_type, expr_type)
             log(self.logger, msg)
+        '''
+        expr_type = expr_type or self.select_type()
+        subtype = expr_type
         generators = self.get_generators(expr_type, only_leaves, subtype,
                                          exclude_var, sam_coercion=sam_coercion)
         expr = ut.random.choice(generators)(expr_type)
@@ -983,6 +988,7 @@ class RustGenerator(Generator):
             self._vars_in_context[self.namespace] += 1
             var_decl = self.gen_variable_decl(expr_type, only_leaves,
                                               expr=expr)
+            var_decl.is_moved = self._move_condition(var_decl)
             expr = ast.Variable(var_decl.name)
         return expr
 
@@ -1179,7 +1185,7 @@ class RustGenerator(Generator):
         if s.is_parameterized():
             type_map = {v: k for k, v in type_var_map.items()} 
             if etype2.is_primitive() and (
-                    etype2.box_type() == self.bt_factory.get_void_type()):
+                    etype2 == self.bt_factory.get_void_type()):
                 type_map = None
 
             #if can_wildcard:
@@ -1276,6 +1282,7 @@ class RustGenerator(Generator):
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
         else:
             variables = list(variables) + self._get_field_vars()
+        variables = [v for v in variables if not v.is_moved]
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
         if subtype:
@@ -1286,8 +1293,18 @@ class RustGenerator(Generator):
         if not variables:
             return self.generate_expr(etype, only_leaves=only_leaves,
                                       subtype=subtype, exclude_var=True)
-        varia = ut.random.choice([v.name for v in variables])
-        return ast.Variable(varia)
+        varia = ut.random.choice([v for v in variables])
+        varia.is_moved = self._move_condition(varia)
+        return ast.Variable(varia.name)
+
+    def _move_condition(self, varia):
+        """ Checks if variable is moved
+            For now strict policy (non-primitive variable becomes obsolete when referenced,
+            also in comparison expressions where move does not occur)
+        """
+        if not varia.get_type().is_primitive() and not varia.get_type().is_function_type():
+            return True
+        return False
 
     def _get_field_vars(self) -> List[ast.VariableDeclaration]:
         """ Get all field variables accessible in the current impl block. """
@@ -1462,6 +1479,7 @@ class RustGenerator(Generator):
         cond = self.generate_expr(self.bt_factory.get_boolean_type(),
                                   only_leaves)
 
+        subtype = False #subtypes irrelevant for now
         if subtype:
             subtypes = tu.find_subtypes(etype, self.get_types(),
                                         include_self=True, concrete_only=True)
@@ -2140,8 +2158,8 @@ class RustGenerator(Generator):
             lambda x: self.gen_field_access(x, only_leaves, subtype), #disabled for now for Rust
             lambda x: self.gen_conditional(x, only_leaves=only_leaves,
                                            subtype=subtype),
-            lambda x: self.gen_is_expr(x, only_leaves=only_leaves,
-                                       subtype=subtype),
+            #lambda x: self.gen_is_expr(x, only_leaves=only_leaves,
+            #                           subtype=subtype),
             gen_fun_call,
             gen_variable
         ]
@@ -2345,8 +2363,8 @@ class RustGenerator(Generator):
                     exclude_covariants=exclude_covariants,
                     exclude_contravariants=exclude_contravariants
                 )
-                if bound.is_primitive():
-                    bound = bound.box_type()
+                #if bound.is_primitive():
+                #    bound = bound.box_type()
             type_param = tp.TypeParameter(name, variance=variance, bound=bound)
             # Add type parameter to context.
             if add_to_context:
@@ -2745,8 +2763,6 @@ class RustGenerator(Generator):
                     return False, {}
             else:
                 type_map = tu.unify_types(type_var_map[key], curr_inst, self.bt_factory, same_type=False)
-                #print(self.bt_factory)
-                #print(type(curr_inst), type(type_var_map[key]), type_map)
                 if not type_map:
                     return False, {}
                 for (t_param, t) in type_map.items():
