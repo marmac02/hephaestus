@@ -54,7 +54,7 @@ class RustBuiltinFactory(bt.BuiltinFactory):
         return StringType()
 
     def get_array_type(self): 
-        return ArrayType()
+        return VecType()
 
     def get_function_type(self, nr_type_parameters=0):
         return FunctionType(nr_type_parameters)
@@ -68,13 +68,17 @@ class RustBuiltinFactory(bt.BuiltinFactory):
             types.remove(AnyType()) #might change later
         return types
 
-
 class RustBuiltin(tp.Builtin):
+
+    def __init__(self, name, primitive=False):
+        super().__init__(name)
+        self.primitive = primitive
+
     def __str__(self):
         return str(self.name) + "(rust-builtin)"
     
     def is_primitive(self):
-        return False
+        return self.primitive
 
 class UnitType(RustBuiltin):
     def __init__(self, name="()"):
@@ -86,7 +90,7 @@ class UnitType(RustBuiltin):
 
 class I8(RustBuiltin):
     def __init__(self, name="i8"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
 
     def get_builtin_type(self):
@@ -94,13 +98,13 @@ class I8(RustBuiltin):
 
 class I16(RustBuiltin):
     def __init__(self, name="i16"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
 
 class I32(RustBuiltin):
     def __init__(self, name="i32"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
     def get_builtin_type(self):
@@ -108,7 +112,7 @@ class I32(RustBuiltin):
 
 class I64(RustBuiltin):
     def __init__(self, name="i64"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
     def get_builtin_type(self):
@@ -116,43 +120,43 @@ class I64(RustBuiltin):
 
 class I128(RustBuiltin):
     def __init__(self, name="i128"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
 
 class U8(RustBuiltin):
     def __init__(self, name="u8"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
 
 class U16(RustBuiltin):
     def __init__(self, name="u16"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
 
 class U32(RustBuiltin):
     def __init__(self, name="u32"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
 
 class U64(RustBuiltin):
     def __init__(self, name="u64"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
 
 class U128(RustBuiltin):
     def __init__(self, name="u128"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
 
 class F32(RustBuiltin):
     def __init__(self, name="f32"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
     def get_builtin_type(self):
@@ -160,7 +164,7 @@ class F32(RustBuiltin):
 
 class F64(RustBuiltin):
     def __init__(self, name="f64"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
     def get_builtin_type(self):
@@ -168,7 +172,7 @@ class F64(RustBuiltin):
 
 class CharType(RustBuiltin):
     def __init__(self, name="char"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
     def get_builtin_type(self):
@@ -184,27 +188,27 @@ class StringType(RustBuiltin):
 
 class BoolType(RustBuiltin):
     def __init__(self, name="bool"):
-        super().__init__(name)
+        super().__init__(name, True)
         #self.supertypes.append(AnyType())
     #handle buildin type
     def get_builtin_type(self):
         return bt.Boolean
 
 #change this, for now it is Vec<T>
-class ArrayType(tp.TypeConstructor, RustBuiltin):
+class VecType(tp.TypeConstructor, RustBuiltin):
     def __init__(self, name="Vec"):
         super().__init__(name, [tp.TypeParameter("T")])
+        super(RustBuiltin, self).__init__(name)
         #self.supertypes.append(AnyRefType())
 
 #fix covariance/contra-variance
-class FunctionType(tp.TypeConstructor, RustBuiltin):
+class FunctionType(tp.TypeConstructor):
     def __init__(self, nr_type_parameters: int):
         name = "fn"
         type_parameters = [tp.TypeParameter("A" + str(i), tp.Contravariant)  #was tp.Contravariant
             for i in range(1, nr_type_parameters + 1)] + [tp.TypeParameter("R", tp.Covariant)] #was 
         self.nr_type_parameters = nr_type_parameters
         super().__init__(name, type_parameters)
-        #self.supertypes.append(AnyRefType())
 
 #erase AnyType (not relevant to rust)
 class AnyType(RustBuiltin):
