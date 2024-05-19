@@ -40,6 +40,7 @@ class RustGenerator(Generator):
         self.enable_pecs = not language == 'kotlin'
         self.disable_variance_functions = True #disabled for now
         self._field_vars = {} #maps impl block ids to available field variables
+        self.move_semantics = False #flag to handle move semantics in Rust
 
         #Map describing impl blocks. It maps struct_names to tuples
         self._impls = {}
@@ -899,6 +900,8 @@ class RustGenerator(Generator):
         Returns:
             A Variable Declaration
         """
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         var_type = etype if etype else self.select_type()
         initial_depth = self.depth
         self.depth += 1
@@ -908,6 +911,9 @@ class RustGenerator(Generator):
         # var v: FI = {x: Int -> x.toLong()}
         expr = expr or self.generate_expr(var_type, only_leaves,
                                           sam_coercion=True)
+        if isinstance(expr, ast.Variable) and not expr.name.startswith("self"):
+            var_decl = self.context.get_vars(self.namespace)[expr.name]
+            var_decl.is_moved = self._move_condition(var_decl)
         self.depth = initial_depth
         is_final = ut.random.bool()
         # We cannot set ? extends X as the type of a variable.
@@ -921,6 +927,7 @@ class RustGenerator(Generator):
             inferred_type=var_type)
         log(self.logger, "Adding variable {} to context in gen_variable_decl".format(var_decl.name))
         self._add_node_to_parent(self.namespace, var_decl)
+        self.move_semantics = prev_move_semantics
         return var_decl
 
     ##### Expressions #####
@@ -986,9 +993,9 @@ class RustGenerator(Generator):
         )
         if gen_var:
             self._vars_in_context[self.namespace] += 1
-            var_decl = self.gen_variable_decl(expr_type, only_leaves,
-                                              expr=expr)
-            var_decl.is_moved = self._move_condition(var_decl)
+            var_decl = self.gen_variable_decl(expr_type, only_leaves, expr=expr)
+            #restricting use of variable in next lines
+            var_decl.is_moved = not var_decl.get_type().is_primitive() and not var_decl.get_type().is_function_type()
             expr = ast.Variable(var_decl.name)
         return expr
 
@@ -1005,6 +1012,8 @@ class RustGenerator(Generator):
             subtype: The type of the generated expression could be a subtype
                 of `expr_type`.
         """
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         # Get all non-final variables for performing the assignment.
         only_current_namespace = self.language == 'rust' and self._inside_inner_function
         variables = self._get_assignable_vars(only_current_namespace)
@@ -1044,6 +1053,7 @@ class RustGenerator(Generator):
                 variable.get_type().has_wildcards()
             )
         )
+        self.move_semantics = prev_move_semantics
         return ast.Assignment(variable.name, self.generate_expr(
             variable.get_type(), only_leaves, subtype, gen_bottom=gen_bottom),
                               receiver=receiver,)
@@ -1159,7 +1169,13 @@ class RustGenerator(Generator):
                 receiver, None, type_f.attr_decl, None))
         objs = [(obj.receiver_expr, obj.attr_decl) for obj in objs]
         receiver, attr = ut.random.choice(objs)
+        if isinstance(receiver, ast.Variable):
+            #prevent use of variables that were partially moved
+            var_decl = self.context.get_vars(self.namespace)[receiver.name]
+            var_decl.is_moved = self.move_semantics
+            print(var_decl.name, var_decl.is_moved, self.move_semantics)
         self.depth = initial_depth
+        print(receiver, attr)
         return ast.FieldAccess(receiver, attr.name)
 
     def _gen_matching_struct(self,
@@ -1282,6 +1298,8 @@ class RustGenerator(Generator):
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
         else:
             variables = list(variables) + self._get_field_vars()
+        #if variables:
+        #    print(variables[0], variables[0].is_moved)
         variables = [v for v in variables if not v.is_moved]
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
@@ -1299,10 +1317,8 @@ class RustGenerator(Generator):
 
     def _move_condition(self, varia):
         """ Checks if variable is moved
-            For now strict policy (non-primitive variable becomes obsolete when referenced,
-            also in comparison expressions where move does not occur)
         """
-        if not varia.get_type().is_primitive() and not varia.get_type().is_function_type():
+        if not varia.get_type().is_primitive() and not varia.get_type().is_function_type() and self.move_semantics:
             return True
         return False
 
@@ -1311,7 +1327,9 @@ class RustGenerator(Generator):
         for ns in self.namespace:
             if ns.startswith('impl'):
                 if ns in self._field_vars.keys():
-                    return self._field_vars[ns]
+                    #if field var is not primitive, and would be used in a move-inducing operation, it should be excluded
+                    field_vars = [v for v in self._field_vars[ns] if (v.get_type().is_primitive() or not self.move_semantics)]
+                    return field_vars
         return []
 
     def gen_array_expr(self,
@@ -1349,6 +1367,8 @@ class RustGenerator(Generator):
             expr_type: exists for compatibility reasons.
             only_leaves: do not generate new leaves except from `expr`.
         """
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = False
         initial_depth = self.depth
         self.depth += 1
         exclude_function_types = self.language == 'java' or self.language == 'rust'
@@ -1357,6 +1377,7 @@ class RustGenerator(Generator):
         e1 = self.generate_expr(etype, only_leaves, subtype=False)
         e2 = self.generate_expr(etype, only_leaves, subtype=False)
         self.depth = initial_depth
+        self.move_semantics = prev_move_semantics
         return ast.EqualityExpr(e1, e2, op)
 
     # pylint: disable=unused-argument
@@ -1395,6 +1416,8 @@ class RustGenerator(Generator):
             expr_type: exists for compatibility reasons.
             only_leaves: do not generate new leaves except from `expr`.
         """
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = False
         valid_types = [
             self.bt_factory.get_string_type(),
             self.bt_factory.get_boolean_type(),
@@ -1457,6 +1480,7 @@ class RustGenerator(Generator):
             op = ut.random.choice(
                 ast.EqualityExpr.VALID_OPERATORS[self.language])
             return ast.EqualityExpr(e1, e2, op)
+        self.move_semantics = prev_move_semantics
         return ast.ComparisonExpr(e1, e2, op)
 
     def gen_conditional(self,
@@ -1722,8 +1746,11 @@ class RustGenerator(Generator):
                 return ref_call
             # NOTE we could use _gen_func_call to generate function references
             # for producing function calls, but then we should always cast them.
-        
-        return self._gen_func_call(etype, only_leaves, subtype)
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
+        func_call = self._gen_func_call(etype, only_leaves, subtype)
+        self.move_semantics = prev_move_semantics
+        return func_call
 
     # gen_func_call Where
 
@@ -1739,7 +1766,15 @@ class RustGenerator(Generator):
             subtype: The returned type could be a subtype of `etype`.
         """
         log(self.logger, "Generating function call of type {}".format(etype))
-        funcs = self._get_matching_function_declarations(etype, subtype)
+        func_decls = self._get_matching_function_declarations(etype, subtype)
+        funcs = []
+        #filtering functions with receivers that are moved variables
+        for f in func_decls:
+            if isinstance(f.receiver_expr, ast.Variable):
+                var = self.context.get_vars(self.namespace)[f.receiver_expr.name]
+                if var.is_moved:
+                    continue
+            funcs.append(f)
         if not funcs:
             msg = "No compatible functions in the current scope for type {}"
             log(self.logger, msg.format(etype))
@@ -1839,6 +1874,8 @@ class RustGenerator(Generator):
         if self._inside_inner_function: # function references only in current scope for Rust
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())
         for var in variables:
+            if var.is_moved:
+                continue
             var_type = var.get_type()
             if not getattr(var_type, 'is_function_type', lambda: False)():
                 continue
@@ -2559,6 +2596,8 @@ class RustGenerator(Generator):
         Returns:
             ast.Block or ast.Expr
         """
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         log(self.logger, "Generating function body with return type: {}".format(ret_type))
         expr_type = (
             self.select_type(ret_types=False)
@@ -2566,6 +2605,7 @@ class RustGenerator(Generator):
             else ret_type
         )
         expr = self.generate_expr(expr_type)
+        self.move_semantics = prev_move_semantics
         decls = list(self.context.get_declarations(
             self.namespace, True).values())
         var_decls = [d for d in decls
@@ -2657,6 +2697,8 @@ class RustGenerator(Generator):
         decls = []
         variables = self.context.get_vars(self.namespace, only_current=self._inside_inner_function).values()
         for var in variables:
+            if var.is_moved:
+                continue
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
                 continue
@@ -3297,6 +3339,8 @@ class RustGenerator(Generator):
     def gen_struct_inst(self, struct_decl: ast.StructDeclaration):
         """Initialize a struct with values.
         """
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         initial_depth = self.depth
         self.depth += 1
         field_names = [field_decl.name for field_decl in struct_decl.fields]
@@ -3306,6 +3350,7 @@ class RustGenerator(Generator):
             matching_expr = self.generate_expr(field_decl.get_type(), only_leaves=True, exclude_var=True, gen_bottom=gen_bottom)
             field_exprs.append(matching_expr)
         self.depth = initial_depth
+        self.move_semantics = prev_move_semantics
         return ast.StructInstantiation(struct_decl.name, field_names, field_exprs)
 
     def gen_struct_decl(self,
@@ -3572,7 +3617,9 @@ class RustGenerator(Generator):
             field_type = tp.substitute_type(field.get_type(), type_var_map)
             field_var_name ="self." + field.name
             #create a virtual variable declaration for each struct field
-            field_vars_list.append(ast.VariableDeclaration(name=field_var_name, expr=None, var_type=field_type))
+            var_decl = ast.VariableDeclaration(name=field_var_name, expr=None, var_type=field_type)
+            var_decl.is_moved = not var_decl.get_type().is_primitive()
+            field_vars_list.append(var_decl)
         self._field_vars[impl_id] = field_vars_list
         
         functions = []
