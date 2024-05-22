@@ -156,7 +156,8 @@ class Block(Node):
 class Declaration(Node):
 
     def __init__(self):
-        self.is_moved = False
+        self.is_moved = False #flag indicating if value is moved
+        self.move_prohibited = False #flag indicating if value should not be moved
 
     def get_type(self):
         raise NotImplementedError('get_type() must be implemented')

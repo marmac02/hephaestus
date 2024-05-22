@@ -149,6 +149,15 @@ class RustGenerator(Generator):
     # FunctionDeclaration, ParameterDeclaration, ClassDeclaration,
     # FieldDeclaration, and VariableDeclaration
 
+    def _get_decl_from_var(self, var):
+        var_decls = self.context.get_vars(self.namespace)
+        if var.name in var_decls.keys():
+            return var_decls[var.name]
+        for fv in self._get_field_vars():
+            if fv.name == var.name:
+                return fv
+        raise ValueError("Variable declaration cannot be found")
+
     def _remove_unused_type_params(self, type_params, params, ret_type):
         """
         Remove function's type parameters that are not included in its
@@ -346,7 +355,8 @@ class RustGenerator(Generator):
             self.context.add_var(self.namespace, p.name, p)
             msg = "Adding parameter to context: {} in function {}".format(p.name, func_name)
             log(self.logger, msg)
-
+        #if func_name == "archenemy":
+        #    import pdb; pdb.set_trace()
         if func.body is not None:
             body = self._gen_func_body(ret_type)
         func.body = body
@@ -911,9 +921,10 @@ class RustGenerator(Generator):
         # var v: FI = {x: Int -> x.toLong()}
         expr = expr or self.generate_expr(var_type, only_leaves,
                                           sam_coercion=True)
-        if isinstance(expr, ast.Variable) and not expr.name.startswith("self"):
-            var_decl = self.context.get_vars(self.namespace)[expr.name]
-            var_decl.is_moved = self._move_condition(var_decl)
+        if isinstance(expr, ast.Variable):
+            vard = self._get_decl_from_var(expr)
+            vard.is_moved = self._move_condition(vard)
+            vard.move_prohibited = self._type_moveable(vard)
         self.depth = initial_depth
         is_final = ut.random.bool()
         # We cannot set ? extends X as the type of a variable.
@@ -931,6 +942,10 @@ class RustGenerator(Generator):
         return var_decl
 
     ##### Expressions #####
+
+    def _type_moveable(self, decl) -> bool:
+        """ Check if type is subject to move semantics rules """
+        return not decl.get_type().is_primitive() and not decl.get_type().is_function_type()
 
 
     def generate_expr(self,
@@ -980,22 +995,27 @@ class RustGenerator(Generator):
         '''
         expr_type = expr_type or self.select_type()
         subtype = expr_type
-        generators = self.get_generators(expr_type, only_leaves, subtype,
-                                         exclude_var, sam_coercion=sam_coercion)
-        expr = ut.random.choice(generators)(expr_type)
-        # Make a probabilistic choice, and assign the generated expr
-        # into a variable, and return that variable reference.
         gen_var = (
             not only_leaves and
             expr_type != self.bt_factory.get_void_type() and
             self._vars_in_context[self.namespace] < cfg.limits.max_var_decls and
             ut.random.bool()
         )
+        generators = self.get_generators(expr_type, only_leaves, subtype,
+                                         exclude_var, sam_coercion=sam_coercion)
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True if gen_var else self.move_semantics
+        expr = ut.random.choice(generators)(expr_type)
+        self.move_semantics = prev_move_semantics
+        # Make a probabilistic choice, and assign the generated expr
+        # into a variable, and return that variable reference.
+        
         if gen_var:
             self._vars_in_context[self.namespace] += 1
             var_decl = self.gen_variable_decl(expr_type, only_leaves, expr=expr)
             #restricting use of variable in next lines
-            var_decl.is_moved = not var_decl.get_type().is_primitive() and not var_decl.get_type().is_function_type()
+            var_decl.is_moved = self._type_moveable(var_decl)
+            var_decl.move_prohibited = self._type_moveable(var_decl)
             expr = ast.Variable(var_decl.name)
         return expr
 
@@ -1041,9 +1061,11 @@ class RustGenerator(Generator):
             var_decl.is_final = False
             var_decl.var_type = var_decl.get_type()
             self.depth = initial_depth
-            return ast.Assignment(var_decl.name,
+            assignment = ast.Assignment(var_decl.name,
                                   self.generate_expr(var_decl.get_type(),
                                                      only_leaves, subtype))
+            self.move_semantics = prev_move_semantics
+            return assignment
         receiver, variable = ut.random.choice(variables)
         self.depth = initial_depth
         gen_bottom = (
@@ -1053,9 +1075,9 @@ class RustGenerator(Generator):
                 variable.get_type().has_wildcards()
             )
         )
+        right_side = self.generate_expr(variable.get_type(), only_leaves, subtype, gen_bottom=gen_bottom)
         self.move_semantics = prev_move_semantics
-        return ast.Assignment(variable.name, self.generate_expr(
-            variable.get_type(), only_leaves, subtype, gen_bottom=gen_bottom),
+        return ast.Assignment(variable.name, right_side,
                               receiver=receiver,)
 
     # Where
@@ -1171,11 +1193,10 @@ class RustGenerator(Generator):
         receiver, attr = ut.random.choice(objs)
         if isinstance(receiver, ast.Variable):
             #prevent use of variables that were partially moved
-            var_decl = self.context.get_vars(self.namespace)[receiver.name]
+            var_decl = self._get_decl_from_var(receiver)
             var_decl.is_moved = self.move_semantics
-            print(var_decl.name, var_decl.is_moved, self.move_semantics)
+            var_decl.move_prohibited = self._type_moveable(var_decl)
         self.depth = initial_depth
-        print(receiver, attr)
         return ast.FieldAccess(receiver, attr.name)
 
     def _gen_matching_struct(self,
@@ -1298,9 +1319,7 @@ class RustGenerator(Generator):
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
         else:
             variables = list(variables) + self._get_field_vars()
-        #if variables:
-        #    print(variables[0], variables[0].is_moved)
-        variables = [v for v in variables if not v.is_moved]
+        variables = [v for v in variables if (not v.is_moved) and (not self.move_semantics or not v.move_prohibited)]
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
         if subtype:
@@ -1313,6 +1332,7 @@ class RustGenerator(Generator):
                                       subtype=subtype, exclude_var=True)
         varia = ut.random.choice([v for v in variables])
         varia.is_moved = self._move_condition(varia)
+        varia.move_prohibited = True
         return ast.Variable(varia.name)
 
     def _move_condition(self, varia):
@@ -1502,7 +1522,8 @@ class RustGenerator(Generator):
         self.depth += 3
         cond = self.generate_expr(self.bt_factory.get_boolean_type(),
                                   only_leaves)
-
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         subtype = False #subtypes irrelevant for now
         if subtype:
             subtypes = tu.find_subtypes(etype, self.get_types(),
@@ -1521,7 +1542,7 @@ class RustGenerator(Generator):
         true_expr = ast.Block([self.generate_expr(true_type, only_leaves, subtype=False)], is_func_block = False) #TODO change this, enclosed in block only for Rust
         false_expr = ast.Block([self.generate_expr(false_type, only_leaves, subtype=False)], is_func_block = False) #TODO change this, enclosed in block only for Rust
         self.depth = initial_depth
-
+        self.move_semantics = prev_move_semantics
         # Note that this an approximation of the type of the whole conditional.
         # To properly estimate the type of conditional, we need to implement
         # the LUB algorithm.
@@ -1746,10 +1767,7 @@ class RustGenerator(Generator):
                 return ref_call
             # NOTE we could use _gen_func_call to generate function references
             # for producing function calls, but then we should always cast them.
-        prev_move_semantics = self.move_semantics
-        self.move_semantics = True
         func_call = self._gen_func_call(etype, only_leaves, subtype)
-        self.move_semantics = prev_move_semantics
         return func_call
 
     # gen_func_call Where
@@ -1771,7 +1789,7 @@ class RustGenerator(Generator):
         #filtering functions with receivers that are moved variables
         for f in func_decls:
             if isinstance(f.receiver_expr, ast.Variable):
-                var = self.context.get_vars(self.namespace)[f.receiver_expr.name]
+                var = self._get_decl_from_var(f.receiver_expr)
                 if var.is_moved:
                     continue
             funcs.append(f)
@@ -1805,9 +1823,15 @@ class RustGenerator(Generator):
         func_type_map = rand_func.attr_inst
         params_map.update(func_type_map or {})
 
+        if isinstance(receiver, ast.Variable):
+            var_decl = self._get_decl_from_var(receiver)
+            var_decl.move_prohibited = self._type_moveable(var_decl)
+
         args = []
         initial_depth = self.depth
         self.depth += 1
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         for param in func.params:
             if isinstance(param, ast.SelfParameter):
                 args.append(ast.CallArgument(ast.SelfParameter()))
@@ -1844,6 +1868,10 @@ class RustGenerator(Generator):
             ]
         )
         trait_func = getattr(func, 'trait_func', True)
+        self.move_semantics = prev_move_semantics
+        if isinstance(receiver, ast.Variable):
+            var_decl = self._get_decl_from_var(receiver)
+            var_decl.move_prohibited = self._type_moveable(var_decl)
         return ast.FunctionCall(func.name, args, receiver,
                                 type_args=type_args, trait_func=trait_func)
 
@@ -1898,11 +1926,15 @@ class RustGenerator(Generator):
             return None
 
         signature, name, receiver = ut.random.choice(refs)
-
+        if isinstance(receiver, ast.Variable):
+            var_decl = self._get_decl_from_var(receiver)
+            var_decl.move_prohibited = self._type_moveable(var_decl)
         # Generate arguments
         args = []
         initial_depth = self.depth
         self.depth += 1
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         for param_type in signature.type_args[:-1]:
             gen_bottom = param_type.is_wildcard() or (
                 param_type.is_parameterized() and param_type.has_wildcards())
@@ -1910,6 +1942,7 @@ class RustGenerator(Generator):
                                      gen_bottom=gen_bottom, sam_coercion=False)
             args.append(ast.CallArgument(arg))
         self.depth = initial_depth
+        self.move_semantics = prev_move_semantics
         function_ast = self.context.get_decl(self.namespace, name)
         return ast.FunctionCall(name, args, receiver=receiver,
                                 is_ref_call=True)
@@ -2538,7 +2571,7 @@ class RustGenerator(Generator):
                 etype, False, 'fields', func_ref=True, signature=True)
         for obj in objs:
             refs.append(ast.FieldAccess(obj.receiver_expr, obj.attr_decl.name))
-
+        
         return refs
 
     # helper generators
@@ -2604,6 +2637,7 @@ class RustGenerator(Generator):
             if ret_type == self.bt_factory.get_void_type()
             else ret_type
         )
+        exprs = [] #remove this
         expr = self.generate_expr(expr_type)
         self.move_semantics = prev_move_semantics
         decls = list(self.context.get_declarations(
@@ -2697,7 +2731,7 @@ class RustGenerator(Generator):
         decls = []
         variables = self.context.get_vars(self.namespace, only_current=self._inside_inner_function).values()
         for var in variables:
-            if var.is_moved:
+            if var.is_moved or (self.move_semantics and var.move_prohibited):
                 continue
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
@@ -3618,7 +3652,8 @@ class RustGenerator(Generator):
             field_var_name ="self." + field.name
             #create a virtual variable declaration for each struct field
             var_decl = ast.VariableDeclaration(name=field_var_name, expr=None, var_type=field_type)
-            var_decl.is_moved = not var_decl.get_type().is_primitive()
+            #var_decl.is_moved = not var_decl.get_type().is_primitive()
+            var_decl.move_prohibited = self._type_moveable(var_decl)
             field_vars_list.append(var_decl)
         self._field_vars[impl_id] = field_vars_list
         
