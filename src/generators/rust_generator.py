@@ -1335,6 +1335,8 @@ class RustGenerator(Generator):
         varia = ut.random.choice([v for v in variables])
         varia.is_moved = self._move_condition(varia)
         varia.move_prohibited = True
+        if varia.name == "self.archenemy":
+            print(varia.name, varia.is_moved, self.move_semantics)
         return ast.Variable(varia.name)
 
     def _move_condition(self, varia):
@@ -2042,6 +2044,8 @@ class RustGenerator(Generator):
         initial_depth = self.depth
         self.depth += 1
         args = []
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         for field in s_decl.fields:
             expr_type = tp.substitute_type(field.get_type(), type_param_map)
             # Generate a bottom value, if we are in this case:
@@ -2058,6 +2062,7 @@ class RustGenerator(Generator):
         if s_decl.is_parameterized():
             new_type = new_type.new(etype.type_args)
         field_names = [f.name for f in s_decl.fields]
+        self.move_semantics = prev_move_semantics
         return ast.StructInstantiation(s_decl.name, etype, field_names, args)
         #return ast.New(new_type, args)
 
@@ -3374,6 +3379,7 @@ class RustGenerator(Generator):
 
     def gen_struct_inst(self, struct_decl: ast.StructDeclaration):
         """Initialize a struct with values.
+           --deprecated
         """
         prev_move_semantics = self.move_semantics
         self.move_semantics = True
