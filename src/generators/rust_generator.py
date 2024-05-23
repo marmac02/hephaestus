@@ -1205,6 +1205,7 @@ class RustGenerator(Generator):
                              signature=False) -> gu.AttrAccessInfo:
         """ Generate a struct that has a field that is etype
         """
+        
         initial_namespace = self.namespace
         struct_name = gu.gen_identifier('capitalize')
         type_params = None
@@ -1217,7 +1218,8 @@ class RustGenerator(Generator):
         self.namespace = ast.GLOBAL_NAMESPACE
         struct_type_map = None
 
-        s = self.gen_struct_decl(struct_name=struct_name, field_type=etype2, type_params=type_params)
+        s = self.gen_struct_decl(struct_name=struct_name, field_type=etype2, init_type_params=type_params)
+
         self.namespace = initial_namespace
         if s.is_parameterized():
             type_map = {v: k for k, v in type_var_map.items()} 
@@ -3390,7 +3392,7 @@ class RustGenerator(Generator):
     def gen_struct_decl(self,
                         struct_name: str=None,
                         field_type: tp.Type=None,
-                        type_params: List[tp.TypeParameter]=None,
+                        init_type_params: List[tp.TypeParameter]=None,
                         ) -> ast.StructDeclaration:
         """Generate a struct declaration.
         Args:
@@ -3404,7 +3406,6 @@ class RustGenerator(Generator):
         self.namespace += (struct_name,)
         initial_depth = self.depth
         self.depth += 1
-        type_params = type_params or self.gen_type_params()
         struct = ast.StructDeclaration(
             name=struct_name,
             fields=[],
@@ -3414,7 +3415,8 @@ class RustGenerator(Generator):
         )
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, struct)
         self._blacklisted_structs.add(struct_name)
-        fields = self.gen_struct_fields(field_type) #fields added to fields list in _add_node_to_parent call of gen_field_decl
+        type_params = init_type_params or self.gen_type_params()
+        fields = self.gen_struct_fields(field_type, init_type_params) #force struct to have fields using init_type_params
         used_type_params = self._get_used_type_params(fields)
         type_params = [t_param for t_param in type_params if t_param in used_type_params] #remove unused type parameters
         struct.fields = fields
@@ -3433,11 +3435,14 @@ class RustGenerator(Generator):
         return used_type_params
 
 
-    def gen_struct_fields(self, field_type: tp.Type=None):
+    def gen_struct_fields(self, field_type: tp.Type=None, type_params: List[tp.TypeParameter]=None):
         max_fields = cfg.limits.cls.max_fields - 1 if field_type else cfg.limits.cls.max_fields
         fields = []
         if field_type:
             fields.append(self.gen_field_decl(field_type, True))
+        if type_params:
+            for t_param in type_params:
+                fields.append(self.gen_field_decl(field_type, True))
         for _ in range(ut.random.integer(0, max_fields)):
             fields.append(self.gen_field_decl(None, True))
         return fields
