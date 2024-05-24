@@ -379,7 +379,8 @@ def gen_program(pid, dirname, packages):
                                 for t in proc.get_transformations()],
             'error': err,
             'program': None,
-            'time': 0
+            'time': 0,
+            'seed': seed,
         }
         return ProgramRes(True, stats)
 
