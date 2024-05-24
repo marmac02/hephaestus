@@ -1217,7 +1217,7 @@ class RustGenerator(Generator):
             type_var_map, etype2, can_wildcard = {}, etype, False
         self.namespace = ast.GLOBAL_NAMESPACE
         struct_type_map = None
-
+        
         s = self.gen_struct_decl(struct_name=struct_name, field_type=etype2, init_type_params=type_params)
 
         self.namespace = initial_namespace
@@ -1335,8 +1335,6 @@ class RustGenerator(Generator):
         varia = ut.random.choice([v for v in variables])
         varia.is_moved = self._move_condition(varia)
         varia.move_prohibited = True
-        if varia.name == "self.archenemy":
-            print(varia.name, varia.is_moved, self.move_semantics)
         return ast.Variable(varia.name)
 
     def _move_condition(self, varia):
@@ -3432,13 +3430,21 @@ class RustGenerator(Generator):
         self.depth = initial_depth
         return struct
 
+    def _get_type_vars_from_type(self, t : tp.Type):
+        if t.is_type_var():
+            return [t]
+        res = []
+        if t.is_parameterized():
+            for t_p in t.type_args:
+                res.extend(self._get_type_vars_from_type(t_p))
+        return res
+
     def _get_used_type_params(self, fields):
         # Get the type parameters that are used in the fields.
-        used_type_params = [f.get_type() for f in fields if f.get_type().is_type_var()]
+        res = []
         for f in fields:
-            if f.get_type().is_parameterized():
-                used_type_params.extend(f.get_type().type_args)
-        return used_type_params
+            res.extend(self._get_type_vars_from_type(f.get_type()))
+        return res
 
 
     def gen_struct_fields(self, field_type: tp.Type=None, type_params: List[tp.TypeParameter]=None):
