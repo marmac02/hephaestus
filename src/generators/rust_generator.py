@@ -994,6 +994,7 @@ class RustGenerator(Generator):
             log(self.logger, msg)
         '''
         expr_type = expr_type or self.select_type()
+        #expr_type = self._concretize_type(expr_type) ###
         subtype = expr_type
         gen_var = (
             not only_leaves and
@@ -1693,6 +1694,7 @@ class RustGenerator(Generator):
             new_subtypes.append(t)
         return new_subtypes
 
+
     def gen_lambda(self,
                    etype: tp.Type=None,
                    not_void=False,
@@ -1737,7 +1739,7 @@ class RustGenerator(Generator):
         self.context.add_lambda(initial_namespace, shadow_name, res)
         body = self._gen_func_body(ret_type)
         res.body = body
-
+        
         self.depth = initial_depth
         self.namespace = initial_namespace
         self._inside_java_lambda = prev_inside_java_lamdba
@@ -1822,9 +1824,11 @@ class RustGenerator(Generator):
         receiver = rand_func.receiver_expr
         params_map = rand_func.receiver_inst
         func = rand_func.attr_decl
-        func_type_map = rand_func.attr_inst
+        func_type_map = rand_func.attr_inst #
+        if not etype.has_type_variables():
+            func_type_map = self._concretize_map(func_type_map)
         params_map.update(func_type_map or {})
-
+        
         if isinstance(receiver, ast.Variable):
             var_decl = self._get_decl_from_var(receiver)
             var_decl.move_prohibited = self._type_moveable(var_decl)
@@ -1834,10 +1838,12 @@ class RustGenerator(Generator):
         self.depth += 1
         prev_move_semantics = self.move_semantics
         self.move_semantics = True
+
         for param in func.params:
             if isinstance(param, ast.SelfParameter):
                 args.append(ast.CallArgument(ast.SelfParameter()))
                 continue
+
             expr_type = tp.substitute_type(param.get_type(), params_map)
             gen_bottom = expr_type.is_wildcard() or (
                 expr_type.is_parameterized() and expr_type.has_wildcards())
@@ -1948,6 +1954,67 @@ class RustGenerator(Generator):
         function_ast = self.context.get_decl(self.namespace, name)
         return ast.FunctionCall(name, args, receiver=receiver,
                                 is_ref_call=True)
+
+    def get_struct_that_impls(self, trait_type):
+        variables = self.context.get_vars(self.namespace).values()
+        for var in variables:
+            var_name = var.name
+            if var.is_moved or var.move_prohibited:
+                continue
+            if var_name not in self._impls.keys():
+                continue
+            for (impl, _, _) in self._impls[var_name]:
+                if impl.trait == trait_type:
+                    var.is_moved = var.move_prohibited = True
+                    return ast.Variable(var_name)
+        for struct_name, lst in self._impls.items():
+            for (impl, _, _) in lst:
+                if impl.trait == trait_type:
+                    return self.gen_new(impl.struct)
+        assert False, "There should be a struct with a matching impl"
+
+    def _concretize_map(self, type_map):
+        """ Replace abstract trait type parameter instantiation with a
+            matching concrete type implementing this trait
+        """
+        if type_map is None:
+            return None
+        updated_map = {}
+        for key in type_map.keys():
+            if key.is_type_var() and key.bound is not None:
+                updated_map[key] = self._concretize_type(key)
+            else:
+                updated_map[key] = type_map[key]
+        return updated_map
+
+    def _concretize_type(self, t):
+        """ Replace abstract trait type with a matching concrete type implementing this trait 
+            By design of creating trait bounds, there should exist a matching struct
+        """
+        if t.is_type_var() and t.bound is not None:
+            trait_type = t.bound
+            for s_name, lst in self._impls.items():
+                for (impl, s_map, t_map) in lst:
+                    impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
+                    if not impl.trait.has_type_variables():
+                        if impl.trait == trait_type:
+                            updated_type = tp.substitute_type(impl.struct, impl_type_map)
+                            return updated_type
+                    else:
+                        trait_map = tu.unify_types(trait_type, impl.trait, self.bt_factory, same_type=False)
+                        if not trait_map:
+                            continue
+                        impl_type_map.update(trait_map)
+                        updated_type = tp.substitute_type(impl.struct, impl_type_map)
+                        return updated_type
+        if t.is_parameterized():
+            updated_type_args = []
+            for t_arg in t.type_args:
+                updated_type_args.append(self._concretize_type(t_arg))
+            updated_type = deepcopy(t)
+            updated_type.type_agrs = updated_type_args
+            return updated_type
+        return t
 
     # pylint: disable=unused-argument
     def gen_new(self,
@@ -2430,22 +2497,32 @@ class RustGenerator(Generator):
             if with_variance and ut.random.bool():
                 variance = ut.random.choice(variances)
             bound = None
-            if ut.random.bool(cfg.prob.bounded_type_parameters):
+
+            #Generate trait bound only for functions
+            if ut.random.bool(cfg.prob.bounded_type_parameters) and for_function:
                 exclude_covariants = variance == tp.Contravariant or for_function
                 exclude_contravariants = True
-                bound = self.select_type(
-                    exclude_arrays=True,
-                    exclude_covariants=exclude_covariants,
-                    exclude_contravariants=exclude_contravariants
-                )
-                #if bound.is_primitive():
-                #    bound = bound.box_type()
+                bound = self.choose_trait_bound()
             type_param = tp.TypeParameter(name, variance=variance, bound=bound)
             # Add type parameter to context.
             if add_to_context:
                 self.context.add_type(self.namespace, type_param.name, type_param)
             type_params.append(type_param)
         return type_params
+
+    def choose_trait_bound(self):
+        """ Choose trait bound 
+            Only traits that are implemented for at least one struct are considered 
+        """
+        candidates = []
+        for (_, lst) in self._impls.items():
+            for (impl, _, _) in lst:
+                if len(impl.type_parameters) != 0:
+                    continue
+                candidates.append(impl.trait)
+        if not candidates:
+            return None
+        return ut.random.choice(candidates)
 
     ### Internal helper functions ###
 
@@ -2473,7 +2550,8 @@ class RustGenerator(Generator):
                                   'variance', None) != tp.Contravariant]
         if param_types and ut.random.bool():
             return ut.random.choice(param_types)
-        return self.select_type(exclude_contravariants=True)
+        ret = self.select_type(exclude_contravariants=True)
+        return ret
 
     def _get_struct(self,
                     etype: tp.Type
@@ -2534,8 +2612,9 @@ class RustGenerator(Generator):
             var_type or None
         """
         # We are only interested in variables of class types.
-        if tu.is_builtin(var_type, self.bt_factory):
+        if tu.is_builtin(var_type, self.bt_factory) or var_type.is_type_var():
             return None
+        '''
         if var_type.is_type_var() or var_type.is_wildcard():
             args = [] if var_type.is_wildcard() else [self.bt_factory]
             bound = var_type.get_bound_rec(*args)
@@ -2543,6 +2622,7 @@ class RustGenerator(Generator):
                   isinstance(bound, tp.TypeParameter)):
                 return None
             var_type = bound
+        '''
         return var_type
 
     def _get_vars_of_function_types(self, etype: tp.Type):
@@ -2642,7 +2722,6 @@ class RustGenerator(Generator):
             if ret_type == self.bt_factory.get_void_type()
             else ret_type
         )
-        exprs = [] #remove this
         expr = self.generate_expr(expr_type)
         self.move_semantics = prev_move_semantics
         decls = list(self.context.get_declarations(
@@ -2738,6 +2817,24 @@ class RustGenerator(Generator):
         for var in variables:
             if var.is_moved or (self.move_semantics and var.move_prohibited):
                 continue
+            
+            #Adding function calls on variables with trait type bounds
+            if var.get_type().is_type_var() and attr_name == 'functions':
+                trait_bound_type = var.get_type().bound
+                if trait_bound_type is None:
+                    continue
+                trait_decl = self.context.get_traits(self.namespace)[trait_bound_type.name]
+                type_map = {}
+                if trait_bound_type.is_parameterized():
+                    type_map = dict(zip(trait_bound_type.t_constructor.type_parameters, trait_bound_type.type_args))
+                for f in trait_decl.function_signatures + trait_decl.default_impls:
+                    updated_f = self._update_func_decl(f, type_map)
+                    if updated_f.get_type() == etype:
+                        decls.append(gu.AttrReceiverInfo(
+                            ast.Variable(var.name), {},
+                            updated_f, {})
+                        )
+            
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
                 continue
@@ -3115,6 +3212,7 @@ class RustGenerator(Generator):
                                check_signature, subtype,
                                get_attr_type=lambda x, y: tp.substitute_type(
                                    x.get_type(), y)):
+        
         attr_type = get_attr_type(attr, type_var_map)
         if not check_signature:
             if subtype:
@@ -3326,15 +3424,16 @@ class RustGenerator(Generator):
         """
         if not etype.has_type_variables():
             return []
-
+        #set bounds to None! Maybe change this
+        '''
         #added for now, probably wrong
         if isinstance(etype, tp.TypeConstructor):
             type_map = {k: k for k in etype.type_parameters}
             return etype.type_parameters, type_map, False
-        
+        '''
         if isinstance(etype, tp.TypeParameter):
             type_params = self.gen_type_params(count=1)
-            type_params[0].bound = etype.get_bound_rec(self.bt_factory)
+            type_params[0].bound = None #etype.get_bound_rec(self.bt_factory)
             type_params[0].variance = tp.Invariant
             return type_params, {etype: type_params[0]}, True
         
@@ -3368,6 +3467,7 @@ class RustGenerator(Generator):
                     filter(lambda t: t is not None, bounds), bounds[0])
             else:
                 type_param.bound = None
+            type_param.bound = None
             type_param.variance = tp.Invariant
             type_var_map[type_var] = type_param
         return type_params, type_var_map, can_wildcard
