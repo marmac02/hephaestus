@@ -184,13 +184,21 @@ class RustTranslator(BaseTranslator):
 
     @append_to
     def visit_func_ref(self, node):
+        old_indent = self.indent
+        self.indent = 0
+        children = node.children()
+        for c in children:
+            c.accept(self)
+        self.indent = old_indent
+        children_res = self.pop_children_res(children)
+        receiver = children_res[0] + "." if children_res else ""
         type_annotation = ""
         if node.signature.is_parameterized(): #annotation needed for parameterized functions
             type_annotation = " as " + self.get_type_name(node.signature)
-        receiver = "self." if self._is_func_in_trait(node.func) else ""
+        
         res = "{indent}{receiver}{name}{type_annotation}".format(
             indent=" " * self.indent,
-            receiver="", 
+            receiver=receiver, 
             name=node.func, 
             type_annotation=type_annotation)
         return res 
@@ -424,7 +432,10 @@ class RustTranslator(BaseTranslator):
     
     @append_to
     def visit_type_param(self, node):
-        return node.name #??? handle covariance and contravariance
+        bound = ""
+        if node.bound is not None:
+            bound = " : " + self.get_type_name(node.bound)
+        return node.name + bound
     
     @append_to
     def visit_variable(self, node):
