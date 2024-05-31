@@ -803,3 +803,22 @@ class StructType(SimpleClassifier):
 class TraitType(AbstractType): #maybe change this
     def __init__(self, name):
         self.name = name
+
+class Reference(Type):
+    def __init__(self, referent_type : tp.Type, is_dyn : bool):
+        self.name = "&" + referent_type.get_name()
+        self.is_dyn = is_dyn
+
+    def is_subtype(self, other: Type):
+        return False
+
+    def is_assignable(self, other: Type):
+        return (isinstance(other, Reference) and self.referent_type.is_assignable(other.referent_type))
+
+    def has_type_variables(self):
+        return self.referent_type.has_type_variables()
+
+    def is_primitive(self):
+        return False
+
+    
