@@ -2517,9 +2517,12 @@ class RustGenerator(Generator):
         candidates = []
         for (_, lst) in self._impls.items():
             for (impl, _, _) in lst:
-                if len(impl.type_parameters) != 0:
-                    continue
-                candidates.append(impl.trait)
+                bound = impl.trait
+                if impl.type_parameters:
+                    #Randomly instantiate impl's type parameters with some concrete types
+                    type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
+                    bound = tp.substitute_type(bound, type_map)
+                candidates.append(bound)
         if not candidates:
             return None
         return ut.random.choice(candidates)
