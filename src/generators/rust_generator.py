@@ -1982,17 +1982,22 @@ class RustGenerator(Generator):
         updated_map = {}
         for key in type_map.keys():
             if key.is_type_var() and key.bound is not None:
-                updated_map[key] = self._concretize_type(key)
+                updated_map[key] = self._concretize_type(key, updated_map)
             else:
                 updated_map[key] = type_map[key]
         return updated_map
 
-    def _concretize_type(self, t):
+    def _concretize_type(self, t, prev_type_map):
         """ Replace abstract trait type with a matching concrete type implementing this trait 
             By design of creating trait bounds, there should exist a matching struct
         """
+        if t in prev_type_map:
+            #type parameter has been concretized already
+            return prev_type_map[t]
         if t.is_type_var() and t.bound is not None:
-            trait_type = t.bound
+            trait_type = deepcopy(t.bound)
+            if trait_type.is_parameterized():
+                trait_type.type_args = [self._concretize_type(t_arg, prev_type_map) for t_arg in trait_type.type_args]
             for s_name, lst in self._impls.items():
                 for (impl, s_map, t_map) in lst:
                     impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
@@ -2010,7 +2015,7 @@ class RustGenerator(Generator):
         if t.is_parameterized():
             updated_type_args = []
             for t_arg in t.type_args:
-                updated_type_args.append(self._concretize_type(t_arg))
+                updated_type_args.append(self._concretize_type(t_arg, prev_type_map))
             updated_type = deepcopy(t)
             updated_type.type_agrs = updated_type_args
             return updated_type
@@ -2499,7 +2504,7 @@ class RustGenerator(Generator):
             bound = None
 
             #Generate trait bound only for functions
-            if ut.random.bool(cfg.prob.bounded_type_parameters) and for_function:
+            if for_function: #ut.random.bool(cfg.prob.bounded_type_parameters) and
                 exclude_covariants = variance == tp.Contravariant or for_function
                 exclude_contravariants = True
                 bound = self.choose_trait_bound()
@@ -2520,8 +2525,10 @@ class RustGenerator(Generator):
                 bound = impl.trait
                 if impl.type_parameters:
                     #Randomly instantiate impl's type parameters with some concrete types
-                    type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
+                    type_map = {t_param: self.select_type(exclude_type_vars=True) for t_param in impl.type_parameters}
+                    print(type_map)
                     bound = tp.substitute_type(bound, type_map)
+                    #print(bound, self.namespace)
                 candidates.append(bound)
         if not candidates:
             return None
