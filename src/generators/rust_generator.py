@@ -1299,13 +1299,8 @@ class RustGenerator(Generator):
            and concretizes trait types.
         """
         inst_t, param_map = tu.instantiate_type_constructor(t, types_list, type_var_map=type_var_map, disable_variance=True)
-        if t.name  == "Caper":
-            print("pre concretization: ", inst_t)
         param_map = self._concretize_map(param_map)
         inst_t, _ = tu.instantiate_type_constructor(t, types_list, type_var_map=param_map, disable_variance=True)
-        if t.name  == "Caper":
-            print("Inst: ", inst_t)
-            print("types list: ", types_list)
         return inst_t, param_map
 
     def instantiate_parameterized_function(self, 
@@ -2028,25 +2023,35 @@ class RustGenerator(Generator):
             trait_type = deepcopy(t)
             if t.is_parameterized():
                 trait_type.type_args = [self.concretize_type(t_arg, prev_type_map) for t_arg in trait_type.type_args]
-            for s_name, lst in self._impls.items():
-                for (impl, _, _) in lst:
-                    #impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
-                    impl_type_map = {t_param: self.select_type() 
-                                 if t_param.bound is None 
-                                 else self.concretize_type(t_param.bound, prev_type_map)
-                                 for t_param in impl.type_parameters
-                                }
-                    if not impl.trait.has_type_variables():
-                        if impl.trait == trait_type:
-                            updated_type = tp.substitute_type(impl.struct, impl_type_map)
-                            return updated_type
-                    else:
-                        trait_map = tu.unify_types(trait_type, impl.trait, self.bt_factory, same_type=False)
-                        if not trait_map:
-                            continue
-                        impl_type_map.update(trait_map)
+            impl_list = sum(self._impls.values(), [])
+            import random
+            random.shuffle(impl_list)
+            #print(impl_list)
+            #print("type t: ", t)
+            for (impl, _, _) in impl_list:
+                #impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
+                impl_type_map = {t_param: self.select_type() 
+                                if t_param.bound is None 
+                                else self.concretize_type(t_param.bound, prev_type_map)
+                                for t_param in impl.type_parameters
+                            }
+                #if str(t) == "Anything<String(rust-builtin), i64(rust-builtin), f64(rust-builtin)>":
+                #    print("yeah")
+                if not impl.trait.has_type_variables():
+                    if str(impl.trait) == str(trait_type):
+                        
                         updated_type = tp.substitute_type(impl.struct, impl_type_map)
                         return updated_type
+                else:
+                    trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False)
+                    print(impl.trait, trait_type, trait_map, impl.struct)
+                    #print(tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False))
+                    #print(self._map_fulfills_bounds(tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False)))
+                    if not trait_map or not self._map_fulfills_bounds(trait_map):
+                        continue
+                    impl_type_map.update(trait_map)
+                    updated_type = tp.substitute_type(impl.struct, impl_type_map)
+                    return updated_type
         if t.is_parameterized():
             #type is a parameterized type, its type args must be concretized
             updated_type_args = []
@@ -2054,8 +2059,25 @@ class RustGenerator(Generator):
                 updated_type_args.append(self.concretize_type(t_arg, prev_type_map))
             updated_type = deepcopy(t)
             updated_type.type_agrs = updated_type_args
+            #print()
             return updated_type
+        #print()
         return t
+
+    def _erase_bounds(self, t):
+        """ Erase type bounds from a type
+        """
+        updated_type = deepcopy(t)
+        if t.is_type_var():
+            updated_type.bound = None
+        if t.is_parameterized():
+            updated_type_args = []
+            for t_arg in t.type_args:
+                updated_type_args.append(self._erase_bounds(t_arg))
+            updated_type.type_args = updated_type_args
+            return updated_type
+        return updated_type
+    
     '''
     def _concretize_type(self, t, prev_type_map):
         """ Replace abstract trait type with a matching concrete type implementing this trait 
@@ -2612,7 +2634,12 @@ class RustGenerator(Generator):
                 bound = impl.trait
                 if impl.type_parameters:
                     #Randomly instantiate impl's type parameters with some concrete types
-                    type_map = {t_param: self.select_type(exclude_type_vars=True) for t_param in impl.type_parameters}
+                    #type_map = {t_param: self.select_type(exclude_type_vars=True) for t_param in impl.type_parameters}
+                    type_map = {t_param: self.select_type() 
+                                 if t_param.bound is None 
+                                 else self.concretize_type(t_param.bound, {})
+                                 for t_param in impl.type_parameters
+                                }
                     bound = tp.substitute_type(bound, type_map)
                 candidates.append(bound)
         if not candidates:
@@ -3035,8 +3062,8 @@ class RustGenerator(Generator):
                 if curr_inst != type_var_map[key]:
                     return False, {}
             else:
-                type_map = tu.unify_types(type_var_map[key], curr_inst, self.bt_factory, same_type=False)
-                if not type_map:
+                type_map = tu.unify_types(type_var_map[key], self._erase_bounds(curr_inst), self.bt_factory, same_type=False)
+                if not type_map or not self._map_fulfills_bounds(type_map):
                     return False, {}
                 for (t_param, t) in type_map.items():
                     if t_param in updated_map.keys() and updated_map[t_param] != t:
@@ -3165,7 +3192,7 @@ class RustGenerator(Generator):
             if not impl_struct.has_type_variables():
                 return impl_struct == t
             else:
-                struct_map = tu.unify_types(t, impl_struct, self.bt_factory)
+                struct_map = tu.unify_types(t, self._erase_bounds(impl_struct), self.bt_factory)
                 if not struct_map or not self._map_fulfills_bounds(struct_map):
                     return False
                 for (t_param, type_inst) in struct_map.items():
@@ -3183,7 +3210,7 @@ class RustGenerator(Generator):
                         if impl.trait == trait_type and is_struct_compatible(impl.struct, t, {}):
                             return True
                     else:
-                        trait_map = tu.unify_types(trait_type, impl.trait, self.bt_factory)
+                        trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory)
                         if not trait_map or not self._map_fulfills_bounds(trait_map):
                             continue
                         if is_struct_compatible(impl.struct, t, trait_map):
@@ -3847,7 +3874,6 @@ class RustGenerator(Generator):
         #Type params used in final declaration of impl block will be a subset of these,
         #depending on instantiations of struct and trait
         impl_type_params = self.gen_type_params(add_to_context=False, count=3, for_impl=True)
-        print(impl_type_params)
         initial_namespace = self.namespace
         self.namespace = ast.GLOBAL_NAMESPACE
 
@@ -3880,9 +3906,6 @@ class RustGenerator(Generator):
         s_type_params = s_type.type_args if s_type.is_parameterized() else []
         impl_type_params = [t_param for t_param in impl_type_params if t_param in s_type_params]
         t_type, trait_map = _inst_type_constructor(trait) #Instantiate trait type with available type params
-        print(impl_type_params, struct.name, s_type_params)
-        print(trait_map)
-        print()
         struct_name = struct.name
         impl_id = self._get_impl_id(str(t_type), str(s_type))
         self.namespace = ast.GLOBAL_NAMESPACE + (impl_id,)
