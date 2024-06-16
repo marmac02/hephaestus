@@ -142,6 +142,169 @@ class RustGenerator(Generator):
         self.namespace = initial_namespace
         return main_func
 
+
+    ### Type utils adjusted for Rust ###
+    def instantiate_type_constructor(self, t : tp.Type, 
+                                     types_list : List[tp.Type], 
+                                     type_var_map=None):
+        """Instantiate a type constructor with random type arguments.
+           Calls the instantiate_type_constructor function in the type_utils module,
+           and concretizes trait types.
+        """
+        inst_t, param_map = tu.instantiate_type_constructor(t, types_list, type_var_map=type_var_map, disable_variance=True)
+        param_map = self._concretize_map(param_map)
+        inst_t, _ = tu.instantiate_type_constructor(t, types_list, type_var_map=param_map, disable_variance=True)
+        return inst_t, param_map
+
+    def instantiate_parameterized_function(self, 
+                                           type_params : List[tp.TypeParameter], 
+                                           types_list : List[tp.Type],
+                                           type_var_map=None):
+        """Instantiate a parameterized function with random type arguments.
+           Calls the instantiate_parameterized_function function in the type_utils module,
+           and concretizes trait types.
+        """
+        param_map = tu.instantiate_parameterized_function(type_params, types_list, type_var_map=type_var_map, only_regular=True)
+        param_map = self._concretize_map(param_map)
+        return param_map
+    
+    def unify_types(self, t1 : tp.Type, t2 : tp.Type, visited_counter=None):
+        type_map = tu.unify_types(t1, self._erase_bounds(t2), self.bt_factory, same_type=False)
+        if type_map:
+            self._restore_bounds(t2, type_map)
+        visited_counter = visited_counter or defaultdict(int)
+        if self._map_fulfills_bounds(type_map, visited_counter):
+            return type_map
+        return {}
+
+    def _erase_bounds(self, t):
+        """ Erase type bounds from a type
+        """
+        updated_type = deepcopy(t)
+        if t.is_type_var():
+            updated_type.bound = None
+        if t.is_parameterized():
+            updated_type_args = []
+            for t_arg in t.type_args:
+                updated_type_args.append(self._erase_bounds(t_arg))
+            updated_type.type_args = updated_type_args
+            return updated_type
+        return updated_type
+
+    def _restore_bounds(self, t, type_map):
+        """ Restore bounds in a type map
+            t is a type containing type parameters with bounds
+            type_map maps type parameters stripped of bounds to instantiaions
+        """
+        if t.is_type_var() and self._erase_bounds(t) in type_map.keys():
+            assigned_inst = type_map[self._erase_bounds(t)]
+            type_map.pop(self._erase_bounds(t))
+            type_map[t] = assigned_inst
+        if t.is_parameterized():
+            for t_arg in t.type_args:
+                self._restore_bounds(t_arg, type_map)
+
+    def _map_fulfills_bounds(self, type_map, visited_counter):
+        """ Check if the type map fulfills the bounds of the type parameters """
+        def is_struct_compatible(impl_struct, t, trait_map):
+            if not impl_struct.has_type_variables():
+                return impl_struct == t
+            else:
+                #struct_map = tu.unify_types(t, self._erase_bounds(impl_struct), self.bt_factory)
+                struct_map = self.unify_types(t, impl_struct)
+                if not struct_map:# or not self._map_fulfills_bounds(struct_map):
+                    return False
+                for (t_param, type_inst) in struct_map.items():
+                    if t_param in trait_map.keys() and trait_map[t_param] != type_inst:
+                        return False
+                return True
+        
+        for t_param, t in type_map.items():
+            if t_param.bound is None:
+                continue
+            trait_type = t_param.bound
+            for (impl, _, _) in sum(self._impls.values(), []):
+                if visited_counter[impl.name] > 2:
+                    continue
+                if not impl.trait.has_type_variables():
+                    if impl.trait == trait_type and is_struct_compatible(impl.struct, t, {}):
+                        return True
+                else:
+                    #trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory)
+                    visited_counter[impl.name] += 1
+                    trait_map = self.unify_types(trait_type, impl.trait, visited_counter)
+                    if not trait_map:# or not self._map_fulfills_bounds(trait_map):
+                        continue
+                    if is_struct_compatible(impl.struct, t, trait_map):
+                        return True
+            #No matching impl found for the type parameter
+            return False
+        return True
+
+    def _concretize_map(self, type_map):
+        """ Replace abstract trait type parameter instantiation with a
+            matching concrete type implementing this trait
+        """
+        if type_map is None:
+            return None
+        updated_map = {}
+        for key in type_map.keys():
+            if key.is_type_var() and key.bound is not None:
+                updated_map[key] = self.concretize_type(type_map[key], updated_map, defaultdict(int))
+            else:
+                updated_map[key] = type_map[key]
+        return updated_map
+    
+    def concretize_type(self, t, prev_type_map=None, visited_counter=None):
+        """ Replace abstract trait type with a matching concrete type implementing this trait 
+            By design of creating trait bounds, there should exist a matching struct declaration
+        """
+        if t in prev_type_map:
+            #type parameter has been concretized already
+            return prev_type_map[t]
+        if t.name in self.context.get_traits(self.namespace).keys():
+            #type is a trait type, it must be concretized
+            trait_type = deepcopy(t)
+            if t.is_parameterized():
+                trait_type.type_args = [self.concretize_type(t_arg, prev_type_map, visited_counter) for t_arg in trait_type.type_args]
+            impl_list = sum(self._impls.values(), [])
+            #import random
+            #random.shuffle(impl_list)
+            for (impl, _, _) in impl_list:
+                if impl.trait.name != trait_type.name or visited_counter[impl.name] > 2: #set some limit to avoid infinite recursion
+                    #Impl is not for the trait_type
+                    continue
+                visited_counter[impl.name] += 1
+                #impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
+                impl_type_map = {t_param: self.select_type() 
+                                if t_param.bound is None 
+                                else self.concretize_type(t_param.bound, prev_type_map, visited_counter)
+                                for t_param in impl.type_parameters
+                            }
+                visited_counter[impl.name] -= 1
+                if not impl.trait.has_type_variables():
+                    if impl.trait == trait_type:
+                        updated_type = tp.substitute_type(impl.struct, impl_type_map)
+                        return updated_type
+                else:
+                    #trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False)
+                    trait_map = self.unify_types(trait_type, impl.trait)
+                    if not trait_map:# or not self._map_fulfills_bounds(trait_map):
+                        continue
+                    impl_type_map.update(trait_map)
+                    updated_type = tp.substitute_type(impl.struct, impl_type_map)
+                    return updated_type
+        if t.is_parameterized():
+            #type is a parameterized type, its type args must be concretized
+            updated_type_args = []
+            for t_arg in t.type_args:
+                updated_type_args.append(self.concretize_type(t_arg, prev_type_map, visited_counter))
+            updated_type = deepcopy(t)
+            updated_type.type_args = updated_type_args
+            return updated_type
+        return t
+
+
     ### Generators ###
 
     ##### Declarations #####
@@ -157,10 +320,11 @@ class RustGenerator(Generator):
                 return fv
         raise ValueError("Variable declaration cannot be found")
 
-    def _remove_unused_type_params(self, type_params, params, ret_type):
+    def _remove_unused_type_params(self, type_params, types_list):
         """
-        Remove function's type parameters that are not included in its
-        signature.
+        Remove type parameters that do not appear in the types_list.
+        types_list is e.g. a list of types that are used in the function signature,
+        or in the struct declaration.
         """
         def get_type_vars(t):
             if t.is_type_var():
@@ -168,30 +332,24 @@ class RustGenerator(Generator):
             return getattr(t, "get_type_variables", lambda x: [])(
                 self.bt_factory
             )
-
-        replaced = {}
         all_type_vars = []
-        param_types = [p.get_type() for p in params]
-        for t in param_types + [ret_type]:
+        for t in types_list:
             all_type_vars.extend(get_type_vars(t))
-
-        for t_param in list(type_params):
-            if t_param in all_type_vars:
-                continue
-            bound = t_param.get_bound_rec(self.bt_factory)
-            type_vars = get_type_vars(t)
-            if any(t in replaced for t in type_vars):
-                bound = None
-            if bound is None:
-                bound = self.bt_factory.get_any_type()
-
-            replaced[t_param] = bound
-            self.context.remove_type(self.namespace, t_param.name)
-            type_params.remove(t_param)
-
         for t_param in type_params:
-            if t_param.bound:
-                t_param.bound = tp.substitute_type(t_param.bound, replaced)
+            if t_param not in all_type_vars:
+                self.context.remove_type(self.namespace, t_param.name)
+        remap = {}
+        for type_param in type_params:
+            if type_param not in all_type_vars:
+                remap[type_param] = self.select_type() \
+                                    if type_param.bound is None \
+                                    else self.concretize_type(type_param.bound, {}, defaultdict(int))
+        
+        type_params = [t_param for t_param in type_params if t_param in all_type_vars]
+        for t_param in type_params:
+            if t_param.bound is not None:
+                t_param.bound = tp.substitute_type(t_param.bound, remap)
+        return type_params
 
     def _add_used_type_params(self, type_params, params, ret_type):
         """
@@ -258,7 +416,6 @@ class RustGenerator(Generator):
             A function declaration node.
         """
         func_name = func_name or gu.gen_identifier('lower')
-
         initial_namespace = self.namespace
         if namespace:
             self.namespace = namespace + (func_name,)
@@ -331,7 +488,7 @@ class RustGenerator(Generator):
             # If we are going to generate a non-abstract method, we generate
             # a temporary body as a placeholder.
             body = ast.BottomConstant(ret_type)
-        self._remove_unused_type_params(type_params, params, ret_type)
+        type_params = self._remove_unused_type_params(type_params, [p.get_type() for p in params] + [ret_type])
         type_params = self._add_used_type_params(type_params, params, ret_type) #for Rust
         if trait_func:
             params = [ast.SelfParameter()] + params #adding &self parameter for Rust trait functions
@@ -1292,28 +1449,7 @@ class RustGenerator(Generator):
                     continue
                 struct_decls.append((s, type_var_map, attr))
         return struct_decls
-
-    def instantiate_type_constructor(self, t : tp.Type, types_list : List[tp.Type], type_var_map=None):
-        """Instantiate a type constructor with random type arguments.
-           Calls the instantiate_type_constructor function in the type_utils module,
-           and concretizes trait types.
-        """
-        inst_t, param_map = tu.instantiate_type_constructor(t, types_list, type_var_map=type_var_map, disable_variance=True)
-        param_map = self._concretize_map(param_map)
-        inst_t, _ = tu.instantiate_type_constructor(t, types_list, type_var_map=param_map, disable_variance=True)
-        return inst_t, param_map
-
-    def instantiate_parameterized_function(self, 
-                                           type_params : List[tp.TypeParameter], 
-                                           types_list : List[tp.Type],
-                                           type_var_map=None):
-        """Instantiate a parameterized function with random type arguments.
-           Calls the instantiate_parameterized_function function in the type_utils module,
-           and concretizes trait types.
-        """
-        param_map = tu.instantiate_parameterized_function(type_params, types_list, type_var_map=type_var_map, only_regular=True)
-        param_map = self._concretize_map(param_map)
-        return param_map
+    
 
     def gen_variable(self,
                      etype: tp.Type,
@@ -1996,87 +2132,6 @@ class RustGenerator(Generator):
                 if impl.trait == trait_type:
                     return self.gen_new(impl.struct)
         assert False, "There should be a struct with a matching impl"
-
-    def _concretize_map(self, type_map):
-        """ Replace abstract trait type parameter instantiation with a
-            matching concrete type implementing this trait
-        """
-        if type_map is None:
-            return None
-        updated_map = {}
-        for key in type_map.keys():
-            if key.is_type_var() and key.bound is not None:
-                updated_map[key] = self.concretize_type(type_map[key], updated_map)
-            else:
-                updated_map[key] = type_map[key]
-        return updated_map
-
-    def concretize_type(self, t, prev_type_map=None):
-        """ Replace abstract trait type with a matching concrete type implementing this trait 
-            By design of creating trait bounds, there should exist a matching struct declaration
-        """
-        if t in prev_type_map:
-            #type parameter has been concretized already
-            return prev_type_map[t]
-        if t.name in self.context.get_traits(self.namespace).keys():
-            #type is a trait type, it must be concretized
-            trait_type = deepcopy(t)
-            if t.is_parameterized():
-                trait_type.type_args = [self.concretize_type(t_arg, prev_type_map) for t_arg in trait_type.type_args]
-            impl_list = sum(self._impls.values(), [])
-            import random
-            random.shuffle(impl_list)
-            #print(impl_list)
-            #print("type t: ", t)
-            for (impl, _, _) in impl_list:
-                #impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
-                impl_type_map = {t_param: self.select_type() 
-                                if t_param.bound is None 
-                                else self.concretize_type(t_param.bound, prev_type_map)
-                                for t_param in impl.type_parameters
-                            }
-                #if str(t) == "Anything<String(rust-builtin), i64(rust-builtin), f64(rust-builtin)>":
-                #    print("yeah")
-                if not impl.trait.has_type_variables():
-                    if str(impl.trait) == str(trait_type):
-                        
-                        updated_type = tp.substitute_type(impl.struct, impl_type_map)
-                        return updated_type
-                else:
-                    trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False)
-                    print(impl.trait, trait_type, trait_map, impl.struct)
-                    #print(tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False))
-                    #print(self._map_fulfills_bounds(tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False)))
-                    if not trait_map or not self._map_fulfills_bounds(trait_map):
-                        continue
-                    impl_type_map.update(trait_map)
-                    updated_type = tp.substitute_type(impl.struct, impl_type_map)
-                    return updated_type
-        if t.is_parameterized():
-            #type is a parameterized type, its type args must be concretized
-            updated_type_args = []
-            for t_arg in t.type_args:
-                updated_type_args.append(self.concretize_type(t_arg, prev_type_map))
-            updated_type = deepcopy(t)
-            updated_type.type_agrs = updated_type_args
-            #print()
-            return updated_type
-        #print()
-        return t
-
-    def _erase_bounds(self, t):
-        """ Erase type bounds from a type
-        """
-        updated_type = deepcopy(t)
-        if t.is_type_var():
-            updated_type.bound = None
-        if t.is_parameterized():
-            updated_type_args = []
-            for t_arg in t.type_args:
-                updated_type_args.append(self._erase_bounds(t_arg))
-            updated_type.type_args = updated_type_args
-            return updated_type
-        return updated_type
     
     '''
     def _concretize_type(self, t, prev_type_map):
@@ -2637,15 +2692,15 @@ class RustGenerator(Generator):
                     #type_map = {t_param: self.select_type(exclude_type_vars=True) for t_param in impl.type_parameters}
                     type_map = {t_param: self.select_type() 
                                  if t_param.bound is None 
-                                 else self.concretize_type(t_param.bound, {})
+                                 else self.concretize_type(t_param.bound, {}, defaultdict(int))
                                  for t_param in impl.type_parameters
                                 }
                     bound = tp.substitute_type(bound, type_map)
                 candidates.append(bound)
         if not candidates:
             return None
-        return ut.random.choice(candidates)
-
+        choice = ut.random.choice(candidates)
+        return choice
     ### Internal helper functions ###
 
     def _get_type_variable_names(self) -> List[str]:
@@ -2956,7 +3011,6 @@ class RustGenerator(Generator):
                             ast.Variable(var.name), {},
                             updated_f, {})
                         )
-            
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
                 continue
@@ -3062,14 +3116,15 @@ class RustGenerator(Generator):
                 if curr_inst != type_var_map[key]:
                     return False, {}
             else:
-                type_map = tu.unify_types(type_var_map[key], self._erase_bounds(curr_inst), self.bt_factory, same_type=False)
-                if not type_map or not self._map_fulfills_bounds(type_map):
+                #type_map = tu.unify_types(type_var_map[key], self._erase_bounds(curr_inst), self.bt_factory, same_type=False)
+                type_map = self.unify_types(type_var_map[key], curr_inst)
+                if not type_map:# or not self._map_fulfills_bounds(type_map):
                     return False, {}
                 for (t_param, t) in type_map.items():
                     if t_param in updated_map.keys() and updated_map[t_param] != t:
                         return False, {}
                     updated_map[t_param] = t
-                
+         
         return True, updated_map
                 
 
@@ -3160,7 +3215,7 @@ class RustGenerator(Generator):
                 #instantiate impl type params randomly, concretizing bounded type params
                 impl_type_map = {t_param: self.select_type() 
                                  if t_param.bound is None 
-                                 else self.concretize_type(t_param.bound, {})
+                                 else self.concretize_type(t_param.bound, {}, defaultdict(int))
                                  for t_param in impl.type_parameters
                                 }
                 for f in impl.functions:
@@ -3170,8 +3225,9 @@ class RustGenerator(Generator):
                         if f.get_type() != etype: #types do not match
                             continue
                     else:
-                        type_map = tu.unify_types(etype, f.get_type(), self.bt_factory, same_type=False)
-                        if not type_map or not self._map_fulfills_bounds(type_map): #types are not compatible
+                        #type_map = tu.unify_types(etype, f.get_type(), self.bt_factory, same_type=False)
+                        type_map = self.unify_types(etype, f.get_type())
+                        if not type_map:# or not self._map_fulfills_bounds(type_map): #types are not compatible
                             continue
                         impl_type_map.update(type_map)
                     #At this point, the function has the matching/compatible return type
@@ -3185,39 +3241,6 @@ class RustGenerator(Generator):
         if not structs:
             return None
         return ut.random.choice(structs)
-
-    def _map_fulfills_bounds(self, type_map):
-        """ Check if the type map fulfills the bounds of the type parameters """
-        def is_struct_compatible(impl_struct, t, trait_map):
-            if not impl_struct.has_type_variables():
-                return impl_struct == t
-            else:
-                struct_map = tu.unify_types(t, self._erase_bounds(impl_struct), self.bt_factory)
-                if not struct_map or not self._map_fulfills_bounds(struct_map):
-                    return False
-                for (t_param, type_inst) in struct_map.items():
-                    if t_param in trait_map.keys() and trait_map[t_param] != type_inst:
-                        return False
-                return True
-        
-        for t_param, t in type_map.items():
-            if t_param.bound is None:
-                continue
-            trait_type = t_param.bound
-            for _, lst in self._impls.items():
-                for (impl, _, _) in lst:
-                    if not impl.trait.has_type_variables():
-                        if impl.trait == trait_type and is_struct_compatible(impl.struct, t, {}):
-                            return True
-                    else:
-                        trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory)
-                        if not trait_map or not self._map_fulfills_bounds(trait_map):
-                            continue
-                        if is_struct_compatible(impl.struct, t, trait_map):
-                            return True
-            #No matching impl found for the type parameter
-            return False
-        return True
 
     def _gen_matching_func(self,
                            etype: tp.Type,
@@ -3588,7 +3611,6 @@ class RustGenerator(Generator):
         """
         if not etype.has_type_variables():
             return []
-        #set bounds to None! Maybe change this
         '''
         #added for now, probably wrong
         if isinstance(etype, tp.TypeConstructor):
@@ -3597,7 +3619,7 @@ class RustGenerator(Generator):
         '''
         if isinstance(etype, tp.TypeParameter):
             type_params = self.gen_type_params(count=1)
-            type_params[0].bound = None #etype.get_bound_rec(self.bt_factory)
+            type_params[0].bound = etype.get_bound_rec(self.bt_factory)
             type_params[0].variance = tp.Invariant
             return type_params, {etype: type_params[0]}, True
         
@@ -3609,7 +3631,7 @@ class RustGenerator(Generator):
             len(type_vars), with_variance=self.language in ['kotlin', 'scala'])
         type_var_map = {}
         available_type_params = list(type_params)
-        can_wildcard = True
+        can_wildcard = False
         for type_var, bounds in type_vars.items():
             # The given type 'etype' has type variables.
             # So, it's not safe to instantiate these type variables with
@@ -3631,7 +3653,6 @@ class RustGenerator(Generator):
                     filter(lambda t: t is not None, bounds), bounds[0])
             else:
                 type_param.bound = None
-            type_param.bound = None
             type_param.variance = tp.Invariant
             type_var_map[type_var] = type_param
         return type_params, type_var_map, can_wildcard
@@ -3674,6 +3695,7 @@ class RustGenerator(Generator):
         self.namespace += (struct_name,)
         initial_depth = self.depth
         self.depth += 1
+        init_type_params = init_type_params or []
         struct = ast.StructDeclaration(
             name=struct_name,
             fields=[],
@@ -3685,8 +3707,8 @@ class RustGenerator(Generator):
         self._blacklisted_structs.add(struct_name)
         type_params = init_type_params or self.gen_type_params()
         fields = self.gen_struct_fields(field_type, init_type_params) #force struct to have fields using init_type_params
-        used_type_params = self._get_used_type_params(fields)
-        type_params = [t_param for t_param in type_params if t_param in used_type_params] #remove unused type parameters
+        type_params = self._remove_unused_type_params(type_params, [f.get_type() for f in fields])
+
         struct.fields = fields
         struct.type_parameters = type_params
         self._blacklisted_structs.remove(struct_name)
@@ -3701,13 +3723,6 @@ class RustGenerator(Generator):
         if t.is_parameterized():
             for t_p in t.type_args:
                 res.extend(self._get_type_vars_from_type(t_p))
-        return res
-
-    def _get_used_type_params(self, fields):
-        # Get the type parameters that are used in the fields.
-        res = []
-        for f in fields:
-            res.extend(self._get_type_vars_from_type(f.get_type()))
         return res
 
 
@@ -3870,13 +3885,14 @@ class RustGenerator(Generator):
                 ttype, type_var_map = self.instantiate_type_constructor(obj.get_type(), self.get_types() + impl_type_params)
             return ttype, type_var_map
 
+        initial_namespace = self.namespace
+        self.namespace = ast.GLOBAL_NAMESPACE
+        
         #Generate candidate type parameters
         #Type params used in final declaration of impl block will be a subset of these,
         #depending on instantiations of struct and trait
         impl_type_params = self.gen_type_params(add_to_context=False, count=3, for_impl=True)
-        initial_namespace = self.namespace
-        self.namespace = ast.GLOBAL_NAMESPACE
-
+        
         #find or generate trait
         if fret_type is not None:
             trait = self._get_matching_trait(fret_type)
