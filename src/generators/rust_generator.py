@@ -248,9 +248,10 @@ class RustGenerator(Generator):
         if type_map is None:
             return None
         updated_map = {}
+        prev_type_map = {}
         for key in type_map.keys():
             if key.is_type_var() and key.bound is not None:
-                updated_map[key] = self.concretize_type(type_map[key], updated_map, defaultdict(int))
+                updated_map[key] = self.concretize_type(type_map[key], prev_type_map, defaultdict(int))
             else:
                 updated_map[key] = type_map[key]
         return updated_map
@@ -285,6 +286,7 @@ class RustGenerator(Generator):
                 if not impl.trait.has_type_variables():
                     if impl.trait == trait_type:
                         updated_type = tp.substitute_type(impl.struct, impl_type_map)
+                        prev_type_map[t] = updated_type
                         return updated_type
                 else:
                     #trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False)
@@ -293,6 +295,7 @@ class RustGenerator(Generator):
                         continue
                     impl_type_map.update(trait_map)
                     updated_type = tp.substitute_type(impl.struct, impl_type_map)
+                    prev_type_map[t] = updated_type
                     return updated_type
         if t.is_parameterized():
             #type is a parameterized type, its type args must be concretized
@@ -301,6 +304,7 @@ class RustGenerator(Generator):
                 updated_type_args.append(self.concretize_type(t_arg, prev_type_map, visited_counter))
             updated_type = deepcopy(t)
             updated_type.type_args = updated_type_args
+            prev_type_map[t] = updated_type
             return updated_type
         return t
 
@@ -341,6 +345,8 @@ class RustGenerator(Generator):
         remap = {}
         for type_param in type_params:
             if type_param not in all_type_vars:
+                if type_param.bound is not None:
+                    type_param.bound = tp.substitute_type(type_param.bound, remap)
                 remap[type_param] = self.select_type() \
                                     if type_param.bound is None \
                                     else self.concretize_type(type_param.bound, {}, defaultdict(int))
