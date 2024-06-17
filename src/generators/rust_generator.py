@@ -40,6 +40,7 @@ class RustGenerator(Generator):
         self.disable_variance_functions = True #disabled for now
         self._field_vars = {} #maps impl block ids to available field variables
         self.move_semantics = False #flag to handle move semantics in Rust
+        self.instantiation_depth = 2 #depth of type instantiation during concretization
 
         #Map describing impl blocks. It maps struct_names to tuples
         self._impls = {}
@@ -170,6 +171,9 @@ class RustGenerator(Generator):
         return param_map
     
     def unify_types(self, t1 : tp.Type, t2 : tp.Type, visited_counter=None):
+        """ Unifies two types and returns a type map if unification is successful.
+            Calls the unify_types function in the type_utils module.
+        """
         type_map = tu.unify_types(t1, self._erase_bounds(t2), self.bt_factory, same_type=False)
         if type_map:
             self._restore_bounds(t2, type_map)
@@ -211,9 +215,8 @@ class RustGenerator(Generator):
             if not impl_struct.has_type_variables():
                 return impl_struct == t
             else:
-                #struct_map = tu.unify_types(t, self._erase_bounds(impl_struct), self.bt_factory)
                 struct_map = self.unify_types(t, impl_struct)
-                if not struct_map:# or not self._map_fulfills_bounds(struct_map):
+                if not struct_map:
                     return False
                 for (t_param, type_inst) in struct_map.items():
                     if t_param in trait_map.keys() and trait_map[t_param] != type_inst:
@@ -225,16 +228,15 @@ class RustGenerator(Generator):
                 continue
             trait_type = t_param.bound
             for (impl, _, _) in sum(self._impls.values(), []):
-                if visited_counter[impl.name] > 2:
+                if visited_counter[impl.name] > self.instantiation_depth:
                     continue
                 if not impl.trait.has_type_variables():
                     if impl.trait == trait_type and is_struct_compatible(impl.struct, t, {}):
                         return True
                 else:
-                    #trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory)
                     visited_counter[impl.name] += 1
                     trait_map = self.unify_types(trait_type, impl.trait, visited_counter)
-                    if not trait_map:# or not self._map_fulfills_bounds(trait_map):
+                    if not trait_map:
                         continue
                     if is_struct_compatible(impl.struct, t, trait_map):
                         return True
@@ -258,11 +260,23 @@ class RustGenerator(Generator):
         return updated_map
     
     def concretize_type(self, t, prev_type_map=None, visited_counter=None):
-        """ Replace abstract trait type with a matching concrete type implementing this trait 
-            By design of creating trait bounds, there should exist a matching struct declaration
+        """ Replace abstract trait type with a matching concrete type implementing this trait.
+            By design of creating trait bounds, there should exist a matching struct declaration.
+            Args:
+                t: type to be concretized
+                prev_type_map: maps previously concretized types to their instantiations
+                    Needed for cases when a type parameter bound depends on other type parameters
+                    from the same list, i.e. Foo< A : T1, B : T2<A> >
+                visited_counter: a dictionary to keep track of the depth of type instantiation
+                    We need this to avoid infinite recursion when unifying trait types - this breaks
+                    infinite cycles by forbidding using the same implementation more than
+                    self.instantiation_depth times
+            Returns:
+                concretized type t, that is some type implementing the trait type t,
+                or t if it is already a concrete type
         """
         if t in prev_type_map:
-            #type parameter has been concretized already
+            #type has been concretized already
             return prev_type_map[t]
         if t.name in self.context.get_traits(self.namespace).keys():
             #type is a trait type, it must be concretized
@@ -270,14 +284,11 @@ class RustGenerator(Generator):
             if t.is_parameterized():
                 trait_type.type_args = [self.concretize_type(t_arg, prev_type_map, visited_counter) for t_arg in trait_type.type_args]
             impl_list = sum(self._impls.values(), [])
-            #import random
-            #random.shuffle(impl_list)
             for (impl, _, _) in impl_list:
-                if impl.trait.name != trait_type.name or visited_counter[impl.name] > 2: #set some limit to avoid infinite recursion
+                if impl.trait.name != trait_type.name or visited_counter[impl.name] > self.instantiation_depth:
                     #Impl is not for the trait_type
                     continue
                 visited_counter[impl.name] += 1
-                #impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
                 impl_type_map = {t_param: self.select_type() 
                                 if t_param.bound is None 
                                 else self.concretize_type(t_param.bound, prev_type_map, visited_counter)
@@ -290,9 +301,8 @@ class RustGenerator(Generator):
                         prev_type_map[t] = updated_type
                         return updated_type
                 else:
-                    #trait_map = tu.unify_types(trait_type, self._erase_bounds(impl.trait), self.bt_factory, same_type=False)
                     trait_map = self.unify_types(trait_type, impl.trait)
-                    if not trait_map:# or not self._map_fulfills_bounds(trait_map):
+                    if not trait_map:
                         continue
                     impl_type_map.update(trait_map)
                     updated_type = tp.substitute_type(impl.struct, impl_type_map)
@@ -3833,39 +3843,7 @@ class RustGenerator(Generator):
             struct = self.gen_struct_decl(field_type=fret_type)
         impl, struct_decl, type_var_map = self.gen_impl(fret_type)
         return self._get_struct_with_matching_function(fret_type)
-
-    '''
-    def gen_matching_impl(self,
-                          fret_type: tp.Type) -> gu.AttrAccessInfo:
-        """ Generate an impl block that implements a trait with a function that returns `fret_type`.
-            Return AttrAccessInfo to that function
-        """
-        impl, struct_decl, type_var_map = self.gen_impl(fret_type)
-        for (impl, s_map, t_map) in self._impls[struct_decl.name]:
-            if s_map == type_var_map:
-                funcs = t_decl.function_signatures + t_decl.default_impls
-
-                impl_type_map = {}
-                for t_param in impl.type_parameters:
-                    t_con = tp.TypeConstructor(t_param.name, [t_param])
-                    _, hlp_map = tu.instantiate_type_constructor(t_con, self.get_types(), 
-                        disable_variance_functions=self.disable_variance_functions, disable_variance=True)
-                    impl_type_map[t_param] = hlp_map[t_param]
-                s_map_copy = {}
-                t_map_copy = {}
-                for key in s_map.keys():
-                    s_map_copy[key] = s_map[key] if not s_map[key] in impl.type_parameters else impl_type_map[s_map[key]]
-                for key in t_map.keys():
-                    t_map_copy[key] = t_map[key] if not t_map[key] in impl.type_parameters else impl_type_map[t_map[key]]
-
-                for func in funcs:
-                    new_func = self._update_func_decl(func, t_map)
-                    if new_func.get_type() == fret_type:
-                        #for now parameterized trait functions not supported
-                        return gu.AttrAccessInfo(struct_decl.get_type(), t_map_copy, new_func, {})
-        
-        return None
-    '''
+ 
     def gen_impl(self,
                  fret_type: tp.Type=None,
                  not_void: bool=False,
@@ -4025,42 +4003,6 @@ class RustGenerator(Generator):
             return None
         t, type_var_map, func = ut.random.choice(trait_decls)
         return t
-        '''
-        func_type_var_map = {}
-        is_parameterized_func = func.is_parameterized()
-        if t.is_parameterized():
-            t_type_var_map = type_var_map
-            t_type, type_var_map = tu.instantiate_type_constructor(
-                t.get_type(), self.get_types(),
-                only_regular=True, type_var_map=type_var_map,
-                disable_variance_functions=self.disable_variance_functions
-            )
-            if is_parameterized_func:
-                types = tu._get_available_types(t.get_type(), self.get_types(), True, False)
-                _, type_var_map = tu._compute_type_variable_assignments(
-                    t.type_parameters + func.type_parameters,
-                    types, type_var_map=type_var_map
-                )
-                params_map, func_type_var_map = tu.split_type_var_map(
-                    type_var_map, t.type_parameters, func.type_parameters)
-                targs = [
-                    params_map[t_param]
-                    for t_param in t.type_parameters
-                ]
-                t_type = t.get_type().new(targs)
-            else:
-                t_type, params_map = tu.instantiate_type_constructor(
-                    t.get_type(), self.get_types(),
-                    only_regular=True, type_var_map=t_type_var_map
-                )
-        else:
-            if is_parameterized_func:
-                func_type_var_map = tu.instantiate_parameterized_function(
-                    func.type_parameters, self.get_types(), only_regular=True,
-                    type_var_map=type_var_map)
-            t_type, params_map = t.get_type(), {}
-        return gu.AttrAccessInfo(t_type, params_map, func, func_type_var_map)
-        '''
 
     def _get_matching_trait_decls(self, 
                                   fret_type: tp.Type,
@@ -4100,26 +4042,3 @@ class RustGenerator(Generator):
         t = self.gen_trait_decl(fret_type=fret_type2, not_void=not_void, type_params=type_params, trait_name=trait_name)
         self.namespace = initial_namespace
         return t
-        '''
-        if t.is_parameterized():
-            type_map = {v: k for k, v in type_var_map.items()}
-            if fret_type2.is_primitive() and (fret_type2.box_type() == self.bt_factory.get_void_type()):
-                type_map = None
-            variance_choices = None
-            t_type, params_map = tu.instantiate_type_constructor(
-                t.get_type(), self.get_types(), type_var_map=type_map,
-                disable_variance_functions=self.disable_variance_functions,
-                variance_choices=variance_choices,
-                disable_variance=variance_choices is None
-            )
-        else:
-            t_type, params_map = t.get_type(), {}
-        for func in t.function_signatures + t.default_impls:
-            if self._is_sigtype_compatible(func, fret_type, params_map, True, False) or func.ret_type == fret_type2:
-                func_type_var_map = {}
-                if func.is_parameterized():
-                    func_type_var_map = tu.instantiate_parameterized_function(
-                        func.type_parameters, self.get_types(), only_regular=True, type_var_map=params_map)
-                return gu.AttrAccessInfo(t_type, params_map, func, func_type_var_map)
-        '''
-        return None
