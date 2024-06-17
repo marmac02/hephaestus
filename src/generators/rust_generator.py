@@ -77,6 +77,7 @@ class RustGenerator(Generator):
         self._blacklisted_classes: set = set()
         self._blacklisted_traits: set = set() #for Rust
         self._blacklisted_structs: set = set() #for Rust
+        tu.flag_for_rust = True
 
     ### Entry Point Generators ###
 
