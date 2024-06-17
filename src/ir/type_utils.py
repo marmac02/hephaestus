@@ -22,7 +22,8 @@ A boolean map that specifies if in place of a TypeParameter we can use
 use-site variance. The first value is for covariance
 and the second for contravariance.
 """
-
+#Flag is true if type utils is used for Rust
+flag_for_rust = False
 
 def _replace_type_argument(base_targ: tp.Type, bound: tp.Type, types,
                            has_type_variables):
@@ -207,8 +208,9 @@ def _construct_related_types(etype: tp.ParameterizedType, types, get_subtypes,
                 # parameterized type. Therefore, we give back the given
                 # type.
                 return etype
-            # Type argument should not be primitives.
-            t_args = [t for t in t_args if not t.is_primitive()]
+            # Type argument should not be primitives (for languages other than Rust).
+            if not flag_for_rust:
+                t_args = [t for t in t_args if not t.is_primitive()]
             t_arg = utils.random.choice(t_args)
             type_var_map[t_param] = t_arg
     return etype.t_constructor.new(list(type_var_map.values()))
