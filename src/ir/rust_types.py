@@ -67,6 +67,10 @@ class RustBuiltinFactory(bt.BuiltinFactory):
         if AnyType() in types:
             types.remove(AnyType()) #might change later
         return types
+    
+    def get_fn_trait_classes(self):
+        return [FnTraitType]
+
 
 class RustBuiltin(tp.Builtin):
 
@@ -203,12 +207,17 @@ class VecType(tp.TypeConstructor, RustBuiltin):
 
 #fix covariance/contra-variance
 class FunctionType(tp.TypeConstructor):
-    def __init__(self, nr_type_parameters: int):
-        name = "fn"
+    def __init__(self, nr_type_parameters: int, name="fn"):
+        fn_name = name
         type_parameters = [tp.TypeParameter("A" + str(i), tp.Contravariant)  #was tp.Contravariant
             for i in range(1, nr_type_parameters + 1)] + [tp.TypeParameter("R", tp.Covariant)] #was 
         self.nr_type_parameters = nr_type_parameters
-        super().__init__(name, type_parameters)
+        super().__init__(fn_name, type_parameters)
+
+class FnTraitType(FunctionType):
+    name = "Fn"
+    def __init__(self, nr_type_parameters: int):
+        super().__init__(nr_type_parameters, name="Fn")
 
 #erase AnyType (not relevant to rust)
 class AnyType(RustBuiltin):

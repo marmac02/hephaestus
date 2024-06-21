@@ -79,6 +79,7 @@ class RustGenerator(Generator):
         self._blacklisted_traits: set = set() #for Rust
         self._blacklisted_structs: set = set() #for Rust
         tu.flag_for_rust = True
+        func_type = self.function_types[1]
 
     ### Entry Point Generators ###
 
@@ -308,6 +309,11 @@ class RustGenerator(Generator):
                     updated_type = tp.substitute_type(impl.struct, impl_type_map)
                     prev_type_map[t] = updated_type
                     return updated_type
+        if t.name in [fn_trait.name for fn_trait in self.bt_factory.get_fn_trait_classes()]:
+            #type is a function trait type, it must be concretized
+            func_constr = self.bt_factory.get_function_type(len(t.type_args) - 1)
+            concrete_fun_type = func_constr.new(t.type_args)
+            return concrete_fun_type
         if t.is_parameterized():
             #type is a parameterized type, its type args must be concretized
             updated_type_args = []
@@ -1887,6 +1893,8 @@ class RustGenerator(Generator):
             shadow_name: give a specific shadow name.
             params: parameters for the lambda.
         """
+        prev_inside_inner_function = self._inside_inner_function
+        self._inside_inner_function = True #restricting capture of variables
         if self.declaration_namespace:
             namespace = self.declaration_namespace
         else:
@@ -1918,7 +1926,7 @@ class RustGenerator(Generator):
         self.depth = initial_depth
         self.namespace = initial_namespace
         self._inside_java_lambda = prev_inside_java_lamdba
-
+        self._inside_inner_function = prev_inside_inner_function
         return res
 
     def gen_func_call(self,
@@ -2090,12 +2098,15 @@ class RustGenerator(Generator):
             if var.is_moved:
                 continue
             var_type = var.get_type()
+            if var_type.is_type_var() and var_type.bound is not None and var_type.bound.name == "Fn":
+                func_type_constr = self.bt_factory.get_function_type(len(var_type.bound.type_args) - 1)
+                func_type = func_type_constr.new(var_type.bound.type_args)
+                var_type = func_type
             if not getattr(var_type, 'is_function_type', lambda: False)():
                 continue
             ret_type = var_type.type_args[-1]
             if (subtype and ret_type.is_assignable(etype)) or ret_type == etype:
                 refs.append((var_type, var.name, None))
-
         if not refs:
             # Detect receivers
             objs = self._get_matching_objects(etype, subtype, 'fields',
@@ -2128,7 +2139,6 @@ class RustGenerator(Generator):
             args.append(ast.CallArgument(arg))
         self.depth = initial_depth
         self.move_semantics = prev_move_semantics
-        function_ast = self.context.get_decl(self.namespace, name)
         return ast.FunctionCall(name, args, receiver=receiver,
                                 is_ref_call=True)
 
@@ -2359,9 +2369,9 @@ class RustGenerator(Generator):
                 return func_ref
 
         #DISABLING Lambdas for now for Rust!!!! Change this later
-        func_ref = self._gen_func_ref(etype, only_leaves=only_leaves)
-        if func_ref:
-            return func_ref
+        #func_ref = self._gen_func_ref(etype, only_leaves=only_leaves)
+        #if func_ref:
+        #    return func_ref
 
         # Generate Lambda
         ret_type, params = self._gen_ret_and_paramas_from_sig(etype, True)
@@ -2701,17 +2711,24 @@ class RustGenerator(Generator):
             Only traits that are implemented for at least one struct are considered 
         """
         candidates = []
+
+        #Adding Fn trait bound
+        nr_func_params = ut.random.choice(self.function_types).nr_type_parameters
+        fn_trait_class = ut.random.choice(self.bt_factory.get_fn_trait_classes()) #Choose available function trait (Fn, ...)
+        fn_trait = tu.instantiate_type_constructor(fn_trait_class(nr_func_params), self.get_types(exclude_type_vars=True))[0]
+        candidates.append(fn_trait)
+
+        #Adding other trait bounds
         for (_, lst) in self._impls.items():
             for (impl, _, _) in lst:
                 bound = impl.trait
                 if impl.type_parameters:
                     #Randomly instantiate impl's type parameters with some concrete types
-                    #type_map = {t_param: self.select_type(exclude_type_vars=True) for t_param in impl.type_parameters}
                     type_map = {t_param: self.select_type() 
                                  if t_param.bound is None 
                                  else self.concretize_type(t_param.bound, {}, defaultdict(int))
                                  for t_param in impl.type_parameters
-                                }
+                               }
                     bound = tp.substitute_type(bound, type_map)
                 candidates.append(bound)
         if not candidates:
@@ -3015,7 +3032,7 @@ class RustGenerator(Generator):
             #Adding function calls on variables with trait type bounds
             if var.get_type().is_type_var() and attr_name == 'functions':
                 trait_bound_type = var.get_type().bound
-                if trait_bound_type is None:
+                if not trait_bound_type or trait_bound_type.name not in self.context.get_traits(self.namespace).keys():
                     continue
                 trait_decl = self.context.get_traits(self.namespace)[trait_bound_type.name]
                 type_map = {}
