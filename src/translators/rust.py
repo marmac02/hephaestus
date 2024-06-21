@@ -62,7 +62,8 @@ class RustTranslator(BaseTranslator):
         if not t_counstructor:
             return t.get_name()
         if t.is_function_type():
-            return "fn(" + ", ".join([self.type_arg2str(t.type_args[ind]) for ind in range(len(t.type_args) - 1)]) + ") -> " + self.type_arg2str(t.type_args[-1])
+            func_type_name = t.t_constructor.get_name()
+            return func_type_name + "(" + ", ".join([self.type_arg2str(t.type_args[ind]) for ind in range(len(t.type_args) - 1)]) + ") -> " + self.type_arg2str(t.type_args[-1])
         return "{}<{}>".format(t.name, ", ".join([self.type_arg2str(t_arg) for t_arg in t.type_args]))
 
     def pop_children_res(self, children):

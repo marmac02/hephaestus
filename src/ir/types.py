@@ -596,7 +596,7 @@ class ParameterizedType(SimpleClassifier):
         return True
 
     def is_function_type(self):
-        return self.t_constructor.name.startswith('Function') or self.t_constructor.name.startswith('fn')
+        return self.t_constructor.name.startswith('Function') or self.t_constructor.name.startswith('fn') or self.t_constructor.name.startswith('Fn')
 
     def get_type_variable_assignments(self):
         return {
