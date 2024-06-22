@@ -51,6 +51,10 @@ class RustGenerator(Generator):
 
         #This flag is used for Rust inner functions that cannot capture outer variables
         self._inside_inner_function = False
+        self.flag_fn = False
+        self.flag_Fn = False
+        self.flag_FnMut = False
+        self.flag_FnOnce = False
 
         #This flag is used for Rust to handle function calls in inner functions inside trait declarations
         self._inside_trait_decl = False
@@ -464,8 +468,8 @@ class RustGenerator(Generator):
 
         prev_inside_java_lamdba = self._inside_java_lambda
         self._inside_java_lambda = nested_function and self.language == "java"
-        prev_inside_inner_function = self._inside_inner_function
-        self._inside_inner_function = nested_function and self.language == "rust"
+        prev_flag_fn = self.flag_fn
+        self.flag_fn = nested_function
         # Type parameters of functions cannot be variant.
         # Also note that at this point, we do not allow a conflict between
         # type variable names of class and type variable names of functions.
@@ -538,7 +542,7 @@ class RustGenerator(Generator):
             body = self._gen_func_body(ret_type)
         func.body = body
         self._inside_java_lambda = prev_inside_java_lamdba
-        self._inside_inner_function = prev_inside_inner_function
+        self.flag_fn = prev_flag_fn
         self.depth = initial_depth
         self.namespace = initial_namespace
         
@@ -1212,8 +1216,7 @@ class RustGenerator(Generator):
         prev_move_semantics = self.move_semantics
         self.move_semantics = True
         # Get all non-final variables for performing the assignment.
-        only_current_namespace = self.language == 'rust' and self._inside_inner_function
-        variables = self._get_assignable_vars(only_current_namespace)
+        variables = self._get_assignable_vars()
         initial_depth = self.depth
         self.depth += 1
         ''' commented out for now for Rust
@@ -1259,43 +1262,16 @@ class RustGenerator(Generator):
 
     # Where
 
-    def _get_assignable_vars(self, only_current_namespace) -> List[ast.Variable]:
-        """Get all non-final variables in context.
-
-        Note that variables inside lambdas in Java should be either final, or
-        effectively final.
+    def _get_assignable_vars(self):
+        """Get all non-final variables in context that can be assigned.
+           If flag_fn or flag_Fn is set to True, then we only consider
+           variables from the current namespace, because we do not want
+           to capture/mutate variables from outer scopes.
         """
         variables = []
-        for var in self.context.get_vars(namespace=self.namespace, only_current=only_current_namespace).values():
-            if self._inside_java_lambda:
-                continue
+        for var in self.context.get_vars(namespace=self.namespace, only_current=self.flag_fn or self.flag_Fn).values():
             if not getattr(var, 'is_final', True):
                 variables.append((None, var))
-                continue
-            var_type = self._get_var_type_to_search(var.get_type())
-            if not var_type:
-                continue
-            if isinstance(getattr(var_type, 't_constructor', None),
-                          self.function_type):
-                continue
-            
-            temp = self._get_class(var_type) #added for Rust
-            if temp is None:
-                continue
-            cls, type_var_map = temp
-
-            #cls, type_var_map = self._get_class(var_type)
-            for field in cls.fields:
-                # Ok here we create a new field whose type corresponds
-                # to the type argument with which the class 'c' is
-                # instantiated.
-                field_sub = ast.FieldDeclaration(
-                    field.name,
-                    field_type=tp.substitute_type(field.get_type(),
-                                                  type_var_map)
-                )
-                if not field.is_final:
-                    variables.append((ast.Variable(var.name), field_sub))
         return variables
 
     # And
@@ -1494,13 +1470,13 @@ class RustGenerator(Generator):
         variables = self.context.get_vars(self.namespace).values()
         # Case where we want only final variables
         # Or variables declared in the nested function
-        if self._inside_java_lambda:
-            variables = list(filter(
-                lambda v: (getattr(v, 'is_final', False) or v not in
-                    self.context.get_vars(self.namespace[:-1]).values()),
-                variables))
-        if self._inside_inner_function: # Variables declared in the inner function or globals for Rust
-            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
+        if self.flag_fn:
+            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values()) + \
+                        list(self.context.get_vars(namespace=self.namespace, glob=True).values())
+        elif self.flag_Fn or self.flag_FnMut:
+            #filtering variables that would make lambda not implement Fn or FnMut
+            variables = [v for v in variables if self.context.get_namespace(var) != self.namespace and
+                         not (self.move_semantics and not var.var_type.is_primitive())]
         else:
             variables = list(variables) + self._get_field_vars()
         variables = [v for v in variables if (not v.is_moved) and (not self.move_semantics or not v.move_prohibited)]
@@ -1880,7 +1856,8 @@ class RustGenerator(Generator):
                    etype: tp.Type=None,
                    not_void=False,
                    params: List[ast.ParameterDeclaration]=None,
-                   only_leaves=False
+                   only_leaves=False,
+                   signature: tp.Type=None,
                   ) -> ast.Lambda:
         """Generate a lambda expression.
 
@@ -1892,9 +1869,19 @@ class RustGenerator(Generator):
             not_void: the lambda should not return void.
             shadow_name: give a specific shadow name.
             params: parameters for the lambda.
+            signature: generate lambda with a given signature.
         """
-        prev_inside_inner_function = self._inside_inner_function
-        self._inside_inner_function = True #restricting capture of variables
+        prev_flag_fn = self.flag_fn
+        prev_flag_Fn = self.flag_Fn
+        prev_flag_FnMut = self.flag_FnMut
+        if signature is not None:
+            if signature.name == "fn":
+                self.flag_fn = True
+            elif signature.name == "Fn":
+                self.flag_Fn = True
+            elif signature.name == "FnMut":
+                self.flag_FnMut = True
+
         if self.declaration_namespace:
             namespace = self.declaration_namespace
         else:
@@ -1905,9 +1892,6 @@ class RustGenerator(Generator):
         self.namespace += (shadow_name,)
         initial_depth = self.depth
         self.depth += 1
-
-        prev_inside_java_lamdba = self._inside_java_lambda
-        self._inside_java_lambda = self.language == "java"
 
         params = params if params is not None else self._gen_func_params()
         param_types = [p.param_type for p in params]
@@ -1925,8 +1909,9 @@ class RustGenerator(Generator):
         
         self.depth = initial_depth
         self.namespace = initial_namespace
-        self._inside_java_lambda = prev_inside_java_lamdba
-        self._inside_inner_function = prev_inside_inner_function
+        self.flag_fn = prev_flag_fn
+        self.flag_Fn = prev_flag_Fn
+        self.flag_FnMut = prev_flag_FnMut
         return res
 
     def gen_func_call(self,
@@ -2087,12 +2072,7 @@ class RustGenerator(Generator):
         refs = []
         # Search for function references in current scope
         variables = self.context.get_vars(self.namespace).values()
-        if self._inside_java_lambda:
-            variables = list(filter(
-                lambda v: (getattr(v, 'is_final', False) or (
-                    v not in self.context.get_vars(self.namespace[:-1]).values())),
-                variables))
-        if self._inside_inner_function: # function references only in current scope for Rust
+        if self.flag_fn:
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())
         for var in variables:
             if var.is_moved:
@@ -2566,8 +2546,7 @@ class RustGenerator(Generator):
         type_params = []
         if not exclude_type_vars:
             t_params = self.context.get_types(namespace=self.namespace, only_current=True) \
-                if self._inside_inner_function and self.language == 'rust' else self.context.get_types(self.namespace)
-            #t_params = self.context.get_types(self.namespace)
+                if self.flag_fn else self.context.get_types(self.namespace)
             for t_param in t_params.values():
                 variance = getattr(t_param, 'variance', None)
                 if exclude_covariants and variance == tp.Covariant:
@@ -3024,7 +3003,7 @@ class RustGenerator(Generator):
             AttrReceiverInfo
         """
         decls = []
-        variables = self.context.get_vars(self.namespace, only_current=self._inside_inner_function).values()
+        variables = self.context.get_vars(self.namespace, only_current=self.flag_fn).values()
         for var in variables:
             if var.is_moved or (self.move_semantics and var.move_prohibited):
                 continue

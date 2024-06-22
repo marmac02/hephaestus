@@ -69,7 +69,7 @@ class RustBuiltinFactory(bt.BuiltinFactory):
         return types
     
     def get_fn_trait_classes(self):
-        return [FnTraitType]
+        return [Fn]
 
 
 class RustBuiltin(tp.Builtin):
@@ -214,10 +214,19 @@ class FunctionType(tp.TypeConstructor):
         self.nr_type_parameters = nr_type_parameters
         super().__init__(fn_name, type_parameters)
 
-class FnTraitType(FunctionType):
+
+class Fn(FunctionType):
     name = "Fn"
     def __init__(self, nr_type_parameters: int):
         super().__init__(nr_type_parameters, name="Fn")
+
+class FnMut(FunctionType):
+    def __init__(self, nr_type_parameters: int):
+        super().__init__(nr_type_parameters, name="FnMut")
+
+class FnOnce(FunctionType):
+    def __init__(self, nr_type_parameters: int):
+        super().__init__(nr_type_parameters, name="FnOnce")
 
 #erase AnyType (not relevant to rust)
 class AnyType(RustBuiltin):
