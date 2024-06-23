@@ -336,13 +336,38 @@ class RustGenerator(Generator):
     # FunctionDeclaration, ParameterDeclaration, ClassDeclaration,
     # FieldDeclaration, and VariableDeclaration
 
+    def get_variables(self, namespace):
+        """ Get all available variable declarations in the namespace and outer namespaces.
+            Variable can be used if it fulfills conditions:
+                - Declared in the current namespace or outer namespaces.
+                - Respect move rules of Rust: if a variable has been moved, or
+                  will be moved after the current statement and it would be used
+                  in a move-inducing setting, it cannot be used. The latter case
+                  occurs due to non-sequential generation logic of Hepheastus.
+                - If a statement is generated for a closure body, it must comply
+                  with function types: fn, Fn, FnMut, and FnOnce.
+                  fn: only variables from current scope (local for lambda) and globals
+                  Fn, FnMut: can capture external variables, but cannot move them
+                  FnOnce: can capture and move external variables out of their environment.
+        """
+        variables = []
+        for var in self.context.get_vars(namespace).values():
+            if var.is_moved or (self.move_semantics and var.move_prohibited):
+                continue
+            if self.flag_fn:
+                if self.context.get_namespace(var) not in {namespace, ast.GLOBAL_NAMESPACE}:
+                    continue
+            if self.flag_Fn or self.flag_FnMut:
+                if self.context.get_namespace(var) not in {namespace, ast.GLOBAL_NAMESPACE} and \
+                   self.move_semantics and not var.is_primitive():
+                    continue
+            variables.append(var)
+        return variables
+
     def _get_decl_from_var(self, var):
         var_decls = self.context.get_vars(self.namespace)
         if var.name in var_decls.keys():
             return var_decls[var.name]
-        for fv in self._get_field_vars():
-            if fv.name == var.name:
-                return fv
         raise ValueError("Variable declaration cannot be found")
 
     def _remove_unused_type_params(self, type_params, types_list):
@@ -498,16 +523,7 @@ class RustGenerator(Generator):
                 log(self.logger, "Adding parameter {} to context in gen_func_decl".format(p.name))
                 self._add_node_to_parent(self.namespace, p)
         else:
-            params = (
-                self._gen_func_params()
-                if (
-                    ut.random.bool(prob=0.25) or
-                    self.language == 'rust' or
-                    self.language == 'java' or
-                    self.language == 'groovy' and is_interface
-                )
-                else self._gen_func_params_with_default()
-            )
+            params = self._gen_func_params()
         ret_type = self._get_func_ret_type(params, etype, not_void=not_void)
         if is_interface or (abstract and ut.random.bool()):
             body, inferred_type = None, None
@@ -545,35 +561,10 @@ class RustGenerator(Generator):
         self.flag_fn = prev_flag_fn
         self.depth = initial_depth
         self.namespace = initial_namespace
-        
         return func
 
-    # Where
 
-    def _gen_func_params_with_default(self) -> List[ast.ParameterDeclaration]:
-        """Generate function parameters that may include one with default.
-
-        It will generate at most one parameter with a default value.
-        """
-        has_default = False
-        params = []
-        for _ in range(ut.random.integer(0, cfg.limits.fn.max_params)):
-            param = self.gen_param_decl()
-            if not has_default:
-                has_default = ut.random.bool()
-            if has_default:
-                prev_decl_namespace = self.declaration_namespace
-                self.declaration_namespace = self.namespace
-                prev_namespace = self.namespace
-                self.namespace = self.namespace[:-1]
-                expr = self.generate_expr(param.get_type(), only_leaves=True)
-                self.namespace = prev_namespace
-                self.declaration_namespace = prev_decl_namespace
-                param.default = expr
-            params.append(param)
-        return params
-
-    def gen_param_decl(self, etype=None) -> ast.ParameterDeclaration:
+    def gen_param_decl(self, etype=None, for_lambda=False) -> ast.ParameterDeclaration:
         """Generate a function Parameter Declaration.
 
         Args:
@@ -584,7 +575,7 @@ class RustGenerator(Generator):
             bound = etype.get_bound_rec()
             param_type = bound or self.select_type(exclude_covariants=True)
         else:
-            param_type = etype or self.select_type(exclude_covariants=True)
+            param_type = etype or self.select_type(include_fn_traits=not for_lambda)
         param = ast.ParameterDeclaration(name, param_type)
         return param
 
@@ -1467,19 +1458,7 @@ class RustGenerator(Generator):
         """
         # Get all variables declared in the current namespace or
         # the outer namespace.
-        variables = self.context.get_vars(self.namespace).values()
-        # Case where we want only final variables
-        # Or variables declared in the nested function
-        if self.flag_fn:
-            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values()) + \
-                        list(self.context.get_vars(namespace=self.namespace, glob=True).values())
-        elif self.flag_Fn or self.flag_FnMut:
-            #filtering variables that would make lambda not implement Fn or FnMut
-            variables = [v for v in variables if self.context.get_namespace(var) != self.namespace and
-                         not (self.move_semantics and not var.var_type.is_primitive())]
-        else:
-            variables = list(variables) + self._get_field_vars()
-        variables = [v for v in variables if (not v.is_moved) and (not self.move_semantics or not v.move_prohibited)]
+        variables = self.get_variables(self.namespace)
         # If we need to use a variable of a specific types, then filter
         # all variables that match this specific type.
         if subtype:
@@ -1501,16 +1480,6 @@ class RustGenerator(Generator):
         if not varia.get_type().is_primitive() and not varia.get_type().is_function_type() and self.move_semantics:
             return True
         return False
-
-    def _get_field_vars(self) -> List[ast.VariableDeclaration]:
-        """ Get all field variables accessible in the current impl block. """
-        for ns in self.namespace:
-            if ns.startswith('impl'):
-                if ns in self._field_vars.keys():
-                    #if field var is not primitive, and would be used in a move-inducing operation, it should be excluded
-                    field_vars = [v for v in self._field_vars[ns] if (v.get_type().is_primitive() or not self.move_semantics)]
-                    return field_vars
-        return []
 
     def gen_array_expr(self,
                        expr_type: tp.Type,
@@ -1893,7 +1862,7 @@ class RustGenerator(Generator):
         initial_depth = self.depth
         self.depth += 1
 
-        params = params if params is not None else self._gen_func_params()
+        params = params if params is not None else self._gen_func_params(for_lambda=True)
         param_types = [p.param_type for p in params]
         for p in params:
             log(self.logger, "Adding parameter {} to context in gen_lambda".format(p.name))
@@ -2071,12 +2040,8 @@ class RustGenerator(Generator):
         # Tuple of signature, name, receiver
         refs = []
         # Search for function references in current scope
-        variables = self.context.get_vars(self.namespace).values()
-        if self.flag_fn:
-            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())
+        variables = self.get_variables(self.namespace)
         for var in variables:
-            if var.is_moved:
-                continue
             var_type = var.get_type()
             if var_type.is_type_var() and var_type.bound is not None and var_type.bound.name == "Fn":
                 func_type_constr = self.bt_factory.get_function_type(len(var_type.bound.type_args) - 1)
@@ -2123,11 +2088,9 @@ class RustGenerator(Generator):
                                 is_ref_call=True)
 
     def get_struct_that_impls(self, trait_type):
-        variables = self.context.get_vars(self.namespace).values()
+        variables = self.get_variables(self.namespace)
         for var in variables:
             var_name = var.name
-            if var.is_moved or var.move_prohibited:
-                continue
             if var_name not in self._impls.keys():
                 continue
             for (impl, _, _) in self._impls[var_name]:
@@ -2462,11 +2425,9 @@ class RustGenerator(Generator):
             ],
         }
         other_candidates = [
-            lambda x: self.gen_field_access(x, only_leaves, subtype), #disabled for now for Rust
+            lambda x: self.gen_field_access(x, only_leaves, subtype),
             lambda x: self.gen_conditional(x, only_leaves=only_leaves,
                                            subtype=subtype),
-            #lambda x: self.gen_is_expr(x, only_leaves=only_leaves,
-            #                           subtype=subtype),
             gen_fun_call,
             gen_variable
         ]
@@ -2518,7 +2479,8 @@ class RustGenerator(Generator):
                   exclude_contravariants=False,
                   exclude_type_vars=False,
                   exclude_function_types=False,
-                  exclude_usr_types=False) -> List[tp.Type]:
+                  exclude_usr_types=False,
+                  include_func_traits=False) -> List[tp.Type]:
         """Get all available types.
 
         Including user-defined types, built-ins, and function types.
@@ -2532,6 +2494,7 @@ class RustGenerator(Generator):
             exclude_contravariants: exclude contravariant type parameters.
             exclude_type_vars: exclude type variables.
             exclude_function_types: exclude function types.
+            include_func_traits: include function traits: Fn, FnMut, FnOnce.
 
         Returns:
             A list of available types.
@@ -2579,7 +2542,8 @@ class RustGenerator(Generator):
                     exclude_contravariants=False,
                     exclude_type_vars=False,
                     exclude_function_types=False,
-                    exclude_usr_types=False) -> tp.Type:
+                    exclude_usr_types=False,
+                    include_fn_traits=False) -> tp.Type:
         """Select a type from the all available types.
 
         It will always instantiating type constructors to parameterized types.
@@ -2603,22 +2567,17 @@ class RustGenerator(Generator):
                                exclude_type_vars=exclude_type_vars,
                                exclude_function_types=exclude_function_types,
                                exclude_usr_types=exclude_usr_types)
+        
+        #temporary, change this
+        if include_fn_traits:
+            for i in range(0, cfg.limits.max_functional_params + 1):
+                types.append(self.bt_factory.get_Fn_type(i))
+                types.append(self.bt_factory.get_FnMut_type(i))
+                types.append(self.bt_factory.get_FnOnce_type(i))
+        
         stype = ut.random.choice(types)
         if stype.is_type_constructor():
             exclude_type_vars = stype.name == self.bt_factory.get_array_type().name
-            '''
-            stype, _ = tu.instantiate_type_constructor(
-                stype, self.get_types(exclude_arrays=True,
-                                      exclude_covariants=True,
-                                      exclude_contravariants=True,
-                                      exclude_type_vars=exclude_type_vars,
-                                      exclude_function_types=exclude_function_types,
-                                      exclude_usr_types=exclude_usr_types),
-                enable_pecs=self.enable_pecs,
-                disable_variance_functions=self.disable_variance_functions,
-                variance_choices={}
-            )
-            '''
             stype, _ = self.instantiate_type_constructor(
                 stype, self.get_types(exclude_arrays=True,
                                       exclude_covariants=True,
@@ -2827,12 +2786,7 @@ class RustGenerator(Generator):
         refs = []
 
         # Get variables without receivers
-        variables = list(self.context.get_vars(self.namespace).values())
-        if self._inside_java_lambda:
-            variables = list(filter(
-                lambda v: (getattr(v, 'is_final', False) or (
-                    v not in self.context.get_vars(self.namespace[:-1]).values())),
-                variables))
+        variables = self.get_variables(self.namespace)
         variables += list(self.context.get_vars(
             ('global',), only_current=True).values())
         for var_decl in variables:
@@ -2851,28 +2805,13 @@ class RustGenerator(Generator):
 
     # helper generators
 
-    def _gen_func_params(self) -> List[ast.ParameterDeclaration]:
+    def _gen_func_params(self, for_lambda=False) -> List[ast.ParameterDeclaration]:
         """Generate parameters for a function or for a lambda.
         """
         params = []
-        arr_index = None
-        vararg_found = False
-        vararg = None
         for i in range(ut.random.integer(0, cfg.limits.fn.max_params)):
-            param = self.gen_param_decl()
-            # If the type of the parameter is an array consider make it
-            # a vararg.
-            if not vararg_found and self._can_vararg_param(param) and (
-                    ut.random.bool()):
-                param.vararg = True
-                arr_index = i
-                vararg = param
-                vararg_found = True
+            param = self.gen_param_decl(for_lambda=for_lambda)
             params.append(param)
-        len_p = len(params)
-        # If one of the parameters is a vararg, then place it to the back.
-        if arr_index is not None and arr_index != len_p - 1:
-            params[len_p - 1], params[arr_index] = vararg, params[len_p - 1]
         return params
 
     # Where
@@ -3003,11 +2942,8 @@ class RustGenerator(Generator):
             AttrReceiverInfo
         """
         decls = []
-        variables = self.context.get_vars(self.namespace, only_current=self.flag_fn).values()
+        variables = self.get_variables(self.namespace)
         for var in variables:
-            if var.is_moved or (self.move_semantics and var.move_prohibited):
-                continue
-            
             #Adding function calls on variables with trait type bounds
             if var.get_type().is_type_var() and attr_name == 'functions':
                 trait_bound_type = var.get_type().bound
@@ -3913,21 +3849,19 @@ class RustGenerator(Generator):
             self._impls[struct_name] = []
         self._impls[struct_name].append((impl, type_var_map, trait_map))
 
-        #Adding type parameters into context, so that they can be used in generated functions
+        #Adding type parameters to context, so that they can be used in generated functions
         for t_param in impl_type_params:
             self.context.add_type(self.namespace, t_param.name, t_param)
         
-        #Adding fields to _fields_vars so that they are accessible in impl block
+        #Adding fields to context so that they are accessible in impl block
         field_vars_list = []
         for field in struct.fields:
             field_type = tp.substitute_type(field.get_type(), type_var_map)
             field_var_name ="self." + field.name
             #create a virtual variable declaration for each struct field
             var_decl = ast.VariableDeclaration(name=field_var_name, expr=None, var_type=field_type)
-            #var_decl.is_moved = not var_decl.get_type().is_primitive()
             var_decl.move_prohibited = self._type_moveable(var_decl)
-            field_vars_list.append(var_decl)
-        self._field_vars[impl_id] = field_vars_list
+            self.context.add_var(self.namespace, field_var_name, var_decl)
         
         functions = []
         for func_decl in trait.function_signatures:

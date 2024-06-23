@@ -68,8 +68,14 @@ class RustBuiltinFactory(bt.BuiltinFactory):
             types.remove(AnyType()) #might change later
         return types
     
-    def get_fn_trait_classes(self):
-        return [Fn]
+    def get_Fn_type(self, nr_type_parameters=0):
+        return Fn(nr_type_parameters)
+    
+    def get_FnMut_type(self, nr_type_parameters=0):
+        return FnMut(nr_type_parameters)
+    
+    def get_FnOnce_type(self, nr_type_parameters=0):
+        return FnOnce(nr_type_parameters)
 
 
 class RustBuiltin(tp.Builtin):
