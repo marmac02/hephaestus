@@ -1653,3 +1653,14 @@ class Impl(Declaration):
 class SelfParameter(ParameterDeclaration):
     def __init__(self):
         super().__init__("SelfParam", types.SelfType())
+
+class BoxedExpr(Expr):
+    def __init__(self, expr: Expr):
+        self.expr = expr
+    
+    def children(self):
+        return [self.expr]
+    
+    def update_children(self, children):
+        super().update_children(children)
+        self.expr = children[0]

@@ -77,6 +77,11 @@ class RustBuiltinFactory(bt.BuiltinFactory):
     def get_FnOnce_type(self, nr_type_parameters=0):
         return FnOnce(nr_type_parameters)
 
+    def get_function_trait_types(self, max_parameters):
+        return [self.get_Fn_type(i) for i in range(0, max_parameters + 1)] + \
+               [self.get_FnMut_type(i) for i in range(0, max_parameters + 1)]
+               #[self.get_FnOnce_type(i) for i in range(0, max_parameters + 1)]
+
 
 class RustBuiltin(tp.Builtin):
 
@@ -220,7 +225,6 @@ class FunctionType(tp.TypeConstructor):
         self.nr_type_parameters = nr_type_parameters
         super().__init__(fn_name, type_parameters)
 
-
 class Fn(FunctionType):
     name = "Fn"
     def __init__(self, nr_type_parameters: int):
@@ -233,6 +237,10 @@ class FnMut(FunctionType):
 class FnOnce(FunctionType):
     def __init__(self, nr_type_parameters: int):
         super().__init__(nr_type_parameters, name="FnOnce")
+
+class BoxType(tp.TypeConstructor):
+    def __init__(self):
+        super().__init__("Box", [tp.TypeParameter("T")])
 
 #erase AnyType (not relevant to rust)
 class AnyType(RustBuiltin):

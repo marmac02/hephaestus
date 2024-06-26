@@ -54,7 +54,7 @@ class RustTranslator(BaseTranslator):
             return self.get_type_name(t_arg)
         return "type_arg2str ERROR"
 
-    def get_type_name(self, t): #check if correct
+    def get_type_name(self, t, is_bound=False): #check if correct
         if t.is_wildcard():
             t = t.get_bound_rec()
             return self.get_type_name(t)
@@ -63,8 +63,12 @@ class RustTranslator(BaseTranslator):
             return t.get_name()
         if t.is_function_type():
             func_type_name = t.t_constructor.get_name()
-            return func_type_name + "(" + ", ".join([self.type_arg2str(t.type_args[ind]) for ind in range(len(t.type_args) - 1)]) + ") -> " + self.type_arg2str(t.type_args[-1])
-        return "{}<{}>".format(t.name, ", ".join([self.type_arg2str(t_arg) for t_arg in t.type_args]))
+            func_type = func_type_name + "(" + ", ".join([self.get_type_name(t.type_args[ind]) for ind in range(len(t.type_args) - 1)]) + \
+                 ") -> " + self.get_type_name(t.type_args[-1])
+            if t.name[0].isupper() and not is_bound:
+                return "Box<dyn " + func_type + ">"
+            return func_type
+        return "{}<{}>".format(t.name, ", ".join([self.get_type_name(t_arg) for t_arg in t.type_args]))
 
     def pop_children_res(self, children):
         len_c = len(children)
@@ -196,7 +200,6 @@ class RustTranslator(BaseTranslator):
         type_annotation = ""
         if node.signature.is_parameterized(): #annotation needed for parameterized functions
             type_annotation = " as " + self.get_type_name(node.signature)
-        
         res = "{indent}{receiver}{name}{type_annotation}".format(
             indent=" " * self.indent,
             receiver=receiver, 
@@ -228,11 +231,11 @@ class RustTranslator(BaseTranslator):
             receiver_expr, func = (
                 ("", node.func)
                 if len(segs) == 1
-                else (segs[0], segs[1])
+                else (segs[0] + '.', segs[1])
             )
             args = children_res
-        if receiver_expr == "" and self._is_func_in_trait(node.func):
-            receiver_expr = "self."
+        #if receiver_expr == "" and self._is_func_in_trait(node.func):
+        #    receiver_expr = "self."
         if self._is_func_in_trait(node.func):
             args = args[1:]
         if args is None:
@@ -288,6 +291,7 @@ class RustTranslator(BaseTranslator):
             body=body_res,
             #ret = ret_type_str
         )
+        res = "Box::new(move " + res + ")"
         self.indent = old_indent
         self.is_unit = prev_is_unit
         self.is_lambda = prev_is_lambda
@@ -435,7 +439,7 @@ class RustTranslator(BaseTranslator):
     def visit_type_param(self, node):
         bound = ""
         if node.bound is not None:
-            bound = " : " + self.get_type_name(node.bound)
+            bound = " : " + self.get_type_name(node.bound, is_bound=True)
         return node.name + bound
     
     @append_to

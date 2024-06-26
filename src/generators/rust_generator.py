@@ -62,6 +62,8 @@ class RustGenerator(Generator):
         self.function_type = type(self.bt_factory.get_function_type())
         self.function_types = self.bt_factory.get_function_types(
             cfg.limits.max_functional_params)
+        self.function_trait_types = self.bt_factory.get_function_trait_types(
+            cfg.limits.max_functional_params)
         self.ret_builtin_types = self.bt_factory.get_non_nothing_types()
         self.builtin_types = self.ret_builtin_types + \
             [self.bt_factory.get_void_type()]
@@ -313,11 +315,13 @@ class RustGenerator(Generator):
                     updated_type = tp.substitute_type(impl.struct, impl_type_map)
                     prev_type_map[t] = updated_type
                     return updated_type
-        if t.name in [fn_trait.name for fn_trait in self.bt_factory.get_fn_trait_classes()]:
+        '''
+        if t.name.lower().startswith("fn"):
             #type is a function trait type, it must be concretized
             func_constr = self.bt_factory.get_function_type(len(t.type_args) - 1)
             concrete_fun_type = func_constr.new(t.type_args)
             return concrete_fun_type
+        '''
         if t.is_parameterized():
             #type is a parameterized type, its type args must be concretized
             updated_type_args = []
@@ -359,7 +363,7 @@ class RustGenerator(Generator):
                     continue
             if self.flag_Fn or self.flag_FnMut:
                 if self.context.get_namespace(var) not in {namespace, ast.GLOBAL_NAMESPACE} and \
-                   self.move_semantics and not var.is_primitive():
+                   self.move_semantics and not var.get_type().is_primitive():
                     continue
             variables.append(var)
         return variables
@@ -1117,7 +1121,7 @@ class RustGenerator(Generator):
 
     def _type_moveable(self, decl) -> bool:
         """ Check if type is subject to move semantics rules """
-        return not decl.get_type().is_primitive() and not decl.get_type().is_function_type()
+        return not decl.get_type().is_primitive() and not (decl.get_type().is_function_type() and decl.get_type().name[0].islower())
 
 
     def generate_expr(self,
@@ -1261,6 +1265,9 @@ class RustGenerator(Generator):
         """
         variables = []
         for var in self.context.get_vars(namespace=self.namespace, only_current=self.flag_fn or self.flag_Fn).values():
+            if self.flag_FnMut or self.flag_FnOnce:
+                if var.is_moved or var.move_prohibited:
+                    continue
             if not getattr(var, 'is_final', True):
                 variables.append((None, var))
         return variables
@@ -1477,7 +1484,7 @@ class RustGenerator(Generator):
     def _move_condition(self, varia):
         """ Checks if variable is moved
         """
-        if not varia.get_type().is_primitive() and not varia.get_type().is_function_type() and self.move_semantics:
+        if self.move_semantics and self._type_moveable(varia):
             return True
         return False
 
@@ -1843,6 +1850,7 @@ class RustGenerator(Generator):
         prev_flag_fn = self.flag_fn
         prev_flag_Fn = self.flag_Fn
         prev_flag_FnMut = self.flag_FnMut
+        prev_flag_FnOnce = self.flag_FnOnce
         if signature is not None:
             if signature.name == "fn":
                 self.flag_fn = True
@@ -1850,6 +1858,8 @@ class RustGenerator(Generator):
                 self.flag_Fn = True
             elif signature.name == "FnMut":
                 self.flag_FnMut = True
+            elif signature.name == "FnOnce":
+                self.flag_FnOnce = True
 
         if self.declaration_namespace:
             namespace = self.declaration_namespace
@@ -1881,6 +1891,7 @@ class RustGenerator(Generator):
         self.flag_fn = prev_flag_fn
         self.flag_Fn = prev_flag_Fn
         self.flag_FnMut = prev_flag_FnMut
+        self.flag_FnOnce = prev_flag_FnOnce
         return res
 
     def gen_func_call(self,
@@ -2179,14 +2190,6 @@ class RustGenerator(Generator):
         for struct in self.context.get_structs(self.namespace).values():
             if struct.name == etype.name:
                 s_decl = struct
-        '''if isinstance(etype, tp.ParameterizedType):
-            etype = etype.to_variance_free()
-        else:
-            struct_name = etype.get_name()
-            struct_decl = self.context.get_structs(('global',)).get(struct_name)
-            
-            return self.gen_struct_inst(struct_decl)
-        '''
         news = {
             self.bt_factory.get_any_type(): ast.New(
                 self.bt_factory.get_any_type(), args=[]),
@@ -2306,7 +2309,7 @@ class RustGenerator(Generator):
             ast.Lambda or ast.FunctionReference
         """
         # We are unable to produce function references in super calls.
-        if ut.random.bool(cfg.prob.func_ref) and not self._in_super_call:
+        if etype.name[0].islower(): #temporary, might change this ut.random.bool(cfg.prob.func_ref) or 
             func_ref = self._gen_func_ref(etype, only_leaves=only_leaves)
             if func_ref:
                 return func_ref
@@ -2319,7 +2322,7 @@ class RustGenerator(Generator):
         # Generate Lambda
         ret_type, params = self._gen_ret_and_paramas_from_sig(etype, True)
         return self.gen_lambda(etype=ret_type, params=params,
-                               only_leaves=only_leaves)
+                               only_leaves=only_leaves, signature=etype)
 
     # Where
 
@@ -2567,15 +2570,10 @@ class RustGenerator(Generator):
                                exclude_type_vars=exclude_type_vars,
                                exclude_function_types=exclude_function_types,
                                exclude_usr_types=exclude_usr_types)
-        
-        #temporary, change this
-        if include_fn_traits:
-            for i in range(0, cfg.limits.max_functional_params + 1):
-                types.append(self.bt_factory.get_Fn_type(i))
-                types.append(self.bt_factory.get_FnMut_type(i))
-                types.append(self.bt_factory.get_FnOnce_type(i))
-        
         stype = ut.random.choice(types)
+        if stype.name=="fn" and ut.random.bool():
+            #If function type is selected, decide if we want to select some function trait type instead.
+            stype = ut.random.choice(self.function_trait_types)
         if stype.is_type_constructor():
             exclude_type_vars = stype.name == self.bt_factory.get_array_type().name
             stype, _ = self.instantiate_type_constructor(
@@ -2651,9 +2649,8 @@ class RustGenerator(Generator):
         candidates = []
 
         #Adding Fn trait bound
-        nr_func_params = ut.random.choice(self.function_types).nr_type_parameters
-        fn_trait_class = ut.random.choice(self.bt_factory.get_fn_trait_classes()) #Choose available function trait (Fn, ...)
-        fn_trait = tu.instantiate_type_constructor(fn_trait_class(nr_func_params), self.get_types(exclude_type_vars=True))[0]
+        fn_trait_constr = ut.random.choice(self.function_trait_types)
+        fn_trait, _ = self.instantiate_type_constructor(fn_trait_constr, self.get_types())
         candidates.append(fn_trait)
 
         #Adding other trait bounds
