@@ -314,8 +314,11 @@ class RustGenerator(Generator):
             #Break the cycle by creating a new type for the trait t
             if t in self.fallback_map:
                 return self.fallback_map[t]
+            initial_namespace = self.namespace
+            self.namespace = ast.GLOBAL_NAMESPACE
             fallback_struct = self.gen_struct_decl(init_type_params=[])
             self.gen_impl(struct_trait_pair=(fallback_struct.get_type(), t))
+            self.namespace = initial_namespace
             self.fallback_map[t] = fallback_struct.get_type()
             return fallback_struct.get_type()
         if t.name in [fn_trait.name for fn_trait in self.bt_factory.get_fn_trait_classes()]:
@@ -3751,7 +3754,7 @@ class RustGenerator(Generator):
         )
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, struct)
         self._blacklisted_structs.add(struct_name)
-        type_params = init_type_params or self.gen_type_params()
+        type_params = self.gen_type_params() if init_type_params is None else init_type_params
         fields = self.gen_struct_fields(field_type, init_type_params) #force struct to have fields using init_type_params
         type_params = self._remove_unused_type_params(type_params, [f.get_type() for f in fields])
 
@@ -3867,9 +3870,6 @@ class RustGenerator(Generator):
         """
 
     def gen_matching_impl(self, fret_type: tp.Type) -> gu.AttrAccessInfo:
-        if fret_type.is_parameterized():
-            trait = self._gen_matching_trait(fret_type, True)
-            struct = self.gen_struct_decl(field_type=fret_type)
         impl = self.gen_impl(fret_type)
         return self._get_struct_with_matching_function(fret_type)
  
