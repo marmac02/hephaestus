@@ -14,7 +14,7 @@ from src import utils as ut
 from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
-from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt
+from src.ir import ast, types as tp, type_utils as tu, rust_types as rt
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
@@ -2054,10 +2054,13 @@ class RustGenerator(Generator):
         variables = self.get_variables(self.namespace)
         for var in variables:
             var_type = var.get_type()
-            if var_type.is_type_var() and var_type.bound is not None and var_type.bound.name == "Fn":
-                func_type_constr = self.bt_factory.get_function_type(len(var_type.bound.type_args) - 1)
-                func_type = func_type_constr.new(var_type.bound.type_args)
-                var_type = func_type
+            
+            if var_type.is_type_var() and var_type.bound is not None \
+                and rt.is_function_trait(var_type.bound):
+                var_type = var_type.bound
+            if rt.is_function_trait(var_type):
+                if var.is_moved:
+                    
             if not getattr(var_type, 'is_function_type', lambda: False)():
                 continue
             ret_type = var_type.type_args[-1]
