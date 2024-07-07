@@ -1500,6 +1500,8 @@ class RustGenerator(Generator):
             subtype: The type of the generated array could be a subtype
                 of `expr_type`.
         """
+        prev_move_semantics = self.move_semantics
+        self.move_semantics = True
         arr_len = ut.random.integer(0, 3)
         etype = expr_type.type_args[0]
         exprs = [
@@ -1508,6 +1510,7 @@ class RustGenerator(Generator):
         ]
         # An array expression (i.e., emptyArray<T>(), arrayOf<T>) cannot
         # take wildcards.
+        self.move_semantics = prev_move_semantics
         return ast.ArrayExpr(expr_type.to_variance_free(), arr_len, exprs)
 
     # pylint: disable=unused-argument
