@@ -61,6 +61,7 @@ class RustGenerator(Generator):
         self.ret_builtin_types = self.bt_factory.get_non_nothing_types()
         self.builtin_types = self.ret_builtin_types + \
             [self.bt_factory.get_void_type()]
+        self.fallback_map = {}
         # In some case we need to use two namespaces. One for having access
         # to variables from scope, and one for adding new declarations.
         # In most cases one namespace is enough, but in cases like
@@ -309,6 +310,14 @@ class RustGenerator(Generator):
                     updated_type = tp.substitute_type(impl.struct, impl_type_map)
                     prev_type_map[t] = updated_type
                     return updated_type
+            #If we reach this point, there is a cycle in the impl declarations
+            #Break the cycle by creating a new type for the trait t
+            if t in self.fallback_map:
+                return self.fallback_map[t]
+            fallback_struct = self.gen_struct_decl(init_type_params=[])
+            self.gen_impl(struct_trait_pair=(fallback_struct.get_type(), t))
+            self.fallback_map[t] = fallback_struct.get_type()
+            return fallback_struct.get_type()
         if t.name in [fn_trait.name for fn_trait in self.bt_factory.get_fn_trait_classes()]:
             #type is a function trait type, it must be concretized
             func_constr = self.bt_factory.get_function_type(len(t.type_args) - 1)
@@ -3861,28 +3870,20 @@ class RustGenerator(Generator):
         if fret_type.is_parameterized():
             trait = self._gen_matching_trait(fret_type, True)
             struct = self.gen_struct_decl(field_type=fret_type)
-        impl, struct_decl, type_var_map = self.gen_impl(fret_type)
+        impl = self.gen_impl(fret_type)
         return self._get_struct_with_matching_function(fret_type)
  
     def gen_impl(self,
                  fret_type: tp.Type=None,
-                 not_void: bool=False,
-                 type_params: List[tp.TypeParameter]=None,
-                 signature: tp.ParameterizedType=None, #remove this???
-                 struct_name: str=None,
-                 trait: ast.TraitDeclaration=None,
-                 ) -> Tuple[ast.Impl, ast.StructDeclaration, Dict]:
+                 struct_trait_pair: Tuple[tp.Type, tp.Type]=None,
+                 ) -> ast.Impl:
         """Generate an impl block.
            Args:
-              fret_type: if provided, at least one function will return this type.
-              not_void: do not generate functions that return void.
-              type_params: list of type parameters.
-              signature: generate at least one function with this signature.
-              struct: struct to implement. If None, a random struct is selected.
-              trait: trait whose functions are to be implemented. If None and fret_type is None, a random trait is selected.
-
-              Returns:
-                
+                fret_type: if provided, at least one function will return this type.
+                struct_trait_pair: if provided, impl is generated for this pair
+                    Otherwise struct and trait are chosen randomly.
+            Returns:
+                An impl declaration node.
         """
         def _inst_type_constructor(obj):
             ttype, type_var_map = obj.get_type(), {}
@@ -3890,52 +3891,56 @@ class RustGenerator(Generator):
                 ttype, type_var_map = self.instantiate_type_constructor(obj.get_type(), self.get_types() + impl_type_params)
             return ttype, type_var_map
 
+        initial_depth = self.depth
+        self.depth += 1
         initial_namespace = self.namespace
         self.namespace = ast.GLOBAL_NAMESPACE
-        
-        #Generate candidate type parameters
-        #Type params used in final declaration of impl block will be a subset of these,
-        #depending on instantiations of struct and trait
-        impl_type_params = self.gen_type_params(add_to_context=False, count=3, for_impl=True)
-        
-        #find or generate trait
-        if fret_type is not None:
-            trait = self._get_matching_trait(fret_type)
-            if not trait:
-                trait = self._gen_matching_trait(fret_type, True)
-        elif trait is None:
-            available_traits = list(self.context.get_traits(self.namespace).values())
-            if available_traits:
-                trait = ut.random.choice(available_traits)
-            else:
-                trait = self.gen_trait_decl()
-        #find or generate struct
-        if struct_name is None:
-            structs_in_context = list(self.context.get_structs(self.namespace).values())
-            if not structs_in_context:
-                struct = self.gen_struct_decl()
-            else:
-                struct = ut.random.choice(structs_in_context)
-            s_type, type_var_map = _inst_type_constructor(struct)
-            if not self._is_impl_allowed(struct, type_var_map, trait):
-                struct = self.gen_struct_decl() #if not allowed, just generate a fresh struct
-                s_type, type_var_map = _inst_type_constructor(struct)
+        impl_type_params = []
+        if struct_trait_pair:
+            s_type, t_type = struct_trait_pair
+            struct = self.context.get_structs(self.namespace)[s_type.name]
+            trait = self.context.get_traits(self.namespace)[t_type.name]
+            struct_map = {t_param: s_type.type_args[i] for i, t_param in enumerate(s_type.t_constructor.type_parameters)} \
+                if s_type.is_parameterized() else {}
+            trait_map = {t_param: t_type.type_args[i] for i, t_param in enumerate(t_type.t_constructor.type_parameters)} \
+                if t_type.is_parameterized() else {}
+            if s_type.has_type_variables():
+                impl_type_params = self._get_type_vars_from_type(s_type)
         else:
-            struct = self.gen_struct_decl(struct_name)
-            s_type, type_var_map = _inst_type_constructor(struct)
-        #Type parameters used in final declaration of impl block are the ones that are also used in struct type instantiation
-        s_type_params = s_type.type_args if s_type.is_parameterized() else []
-        impl_type_params = [t_param for t_param in impl_type_params if t_param in s_type_params]
-        t_type, trait_map = _inst_type_constructor(trait) #Instantiate trait type with available type params
-        struct_name = struct.name
+            #Generate candidate type parameters
+            #Type params used in final declaration of impl block will be a subset of these,
+            #depending on instantiations of struct and trait
+            impl_type_params = self.gen_type_params(add_to_context=False, count=3, for_impl=True)
+            #find or generate trait
+            if fret_type is not None:
+                trait = self._get_matching_trait(fret_type)
+                if not trait:
+                    trait = self._gen_matching_trait(fret_type, True)
+            else:
+                available_traits = list(self.context.get_traits(self.namespace).values())
+                trait = self.gen_trait_decl() if not available_traits \
+                    else ut.random.choice(available_traits)
+            #find or generate struct
+            structs_in_context = list(self.context.get_structs(self.namespace).values())
+            struct = self.gen_struct_decl() if not structs_in_context \
+                else ut.random.choice(structs_in_context)
+            s_type, struct_map = _inst_type_constructor(struct)
+            if not self._is_impl_allowed(struct, struct_map, trait):
+                struct = self.gen_struct_decl() #if not allowed, just generate a fresh struct
+                s_type, struct_map = _inst_type_constructor(struct)
+            #Type parameters used in final declaration of impl block are the ones that are also used in struct type instantiation
+            s_type_params = sum([self._get_type_vars_from_type(t_arg) for t_arg in s_type.type_args], []) \
+                if s_type.is_parameterized() else []
+            impl_type_params = [t_param for t_param in impl_type_params if t_param in s_type_params]
+            t_type, trait_map = _inst_type_constructor(trait)
         impl_id = self._get_impl_id(str(t_type), str(s_type))
         self.namespace = ast.GLOBAL_NAMESPACE + (impl_id,)
 
         #Adding impl block info to _impls
         impl = ast.Impl(impl_id, s_type, t_type, [], impl_type_params)
-        if not struct_name in self._impls.keys():
-            self._impls[struct_name] = []
-        self._impls[struct_name].append((impl, type_var_map, trait_map))
+        if not struct.name in self._impls.keys():
+            self._impls[struct.name] = []
+        self._impls[struct.name].append((impl, struct_map, trait_map))
 
         #Adding type parameters into context, so that they can be used in generated functions
         for t_param in impl_type_params:
@@ -3944,7 +3949,7 @@ class RustGenerator(Generator):
         #Adding fields to _fields_vars so that they are accessible in impl block
         field_vars_list = []
         for field in struct.fields:
-            field_type = tp.substitute_type(field.get_type(), type_var_map)
+            field_type = tp.substitute_type(field.get_type(), struct_map)
             field_var_name ="self." + field.name
             #create a virtual variable declaration for each struct field
             var_decl = ast.VariableDeclaration(name=field_var_name, expr=None, var_type=field_type)
@@ -3979,8 +3984,8 @@ class RustGenerator(Generator):
 
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, impl)
         self.namespace = initial_namespace
-        
-        return (impl, struct, type_var_map)
+        self.depth = initial_depth
+        return impl
 
 
     def _update_func_decl(self, func_decl: ast.FunctionDeclaration, t_map: Dict):
