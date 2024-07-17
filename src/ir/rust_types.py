@@ -79,12 +79,24 @@ class RustBuiltinFactory(bt.BuiltinFactory):
 
     def get_function_trait_types(self, max_parameters):
         return [self.get_Fn_type(i) for i in range(0, max_parameters + 1)] + \
-               [self.get_FnMut_type(i) for i in range(0, max_parameters + 1)]
-               #[self.get_FnOnce_type(i) for i in range(0, max_parameters + 1)]
+               [self.get_FnMut_type(i) for i in range(0, max_parameters + 1)] + \
+               [self.get_FnOnce_type(i) for i in range(0, max_parameters + 1)]
 
 def is_function_trait(t: tp.Type):
     return t.is_parameterized() and \
         (getattr(t.t_constructor, "is_function_trait", lambda: False)())
+
+def is_Fn(t: tp.Type):
+    return t.is_parameterized() and \
+        isinstance(t.t_constructor, Fn)
+
+def is_FnMut(t: tp.Type):
+    return t.is_parameterized() and \
+        isinstance(t.t_constructor, FnMut)
+
+def is_FnOnce(t: tp.Type):
+    return t.is_parameterized() and \
+        isinstance(t.t_constructor, FnOnce)
 
 class RustBuiltin(tp.Builtin):
 

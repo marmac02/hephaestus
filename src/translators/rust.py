@@ -286,12 +286,12 @@ class RustTranslator(BaseTranslator):
             if node.ret_type
             else ""
         )'''
-        res = "|{params}| {body}".format( #??? is ret even allowed in Rust
+        res = "|{params}| {body}".format(
             params=", ".join(param_res),
             body=body_res,
-            #ret = ret_type_str
         )
-        res = "Box::new(move " + res + ")"
+        cast = self.get_type_name(node.signature)
+        res = "Box::new(move " + res + ")"# + " as " + cast
         self.indent = old_indent
         self.is_unit = prev_is_unit
         self.is_lambda = prev_is_lambda
