@@ -1407,7 +1407,7 @@ class RustGenerator(Generator):
         struct_type_map = None
 
         s = self.gen_struct_decl(struct_name=struct_name, field_type=etype2, init_type_params=type_params)
-        print(s.name, etype, etype2, type_params, type_var_map)
+        
         self.namespace = initial_namespace
         if s.is_parameterized():
             type_map = {v: k for k, v in type_var_map.items()} 
@@ -3580,7 +3580,7 @@ class RustGenerator(Generator):
     # Where
 
     def _create_type_params_from_etype(self, etype: tp.Type):
-        type_params = self._retrieve_type_params(etype)
+        type_params = list(set(self._retrieve_type_params(etype)))
         mapping = {tv : tv for tv in type_params}
         return type_params, mapping, False
 
