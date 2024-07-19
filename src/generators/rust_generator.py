@@ -55,6 +55,7 @@ class RustGenerator(Generator):
         self.flag_Fn = False
         self.flag_FnMut = False
         self.flag_FnOnce = False
+        self.exclude_type_vars_closure = False
 
         #This flag is used for Rust to handle function calls in inner functions inside trait declarations
         self._inside_trait_decl = False
@@ -2609,7 +2610,7 @@ class RustGenerator(Generator):
                                exclude_arrays=exclude_arrays,
                                exclude_covariants=exclude_covariants,
                                exclude_contravariants=exclude_contravariants,
-                               exclude_type_vars=exclude_type_vars,
+                               exclude_type_vars=exclude_type_vars or self.exclude_type_vars_closure,
                                exclude_function_types=exclude_function_types,
                                exclude_usr_types=exclude_usr_types)
         stype = ut.random.choice(types)
@@ -2890,7 +2891,9 @@ class RustGenerator(Generator):
             if ret_type == self.bt_factory.get_void_type()
             else ret_type
         )
+        self.exclude_type_vars_closure = True
         expr = self.generate_expr(expr_type)
+        self.exclude_type_vars_closure = False
         self.move_semantics = prev_move_semantics
         decls = list(self.context.get_declarations(
             self.namespace, True).values())
