@@ -15,6 +15,7 @@ from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
 from src.ir import ast, types as tp, type_utils as tu, rust_types as rt
+from src.ir.node import Node
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
@@ -361,9 +362,7 @@ class RustGenerator(Generator):
         for var in self.context.get_vars(namespace).values():
             if var.is_moved or (self.move_semantics and var.move_prohibited):
                 continue
-            if var.name.startswith("self.") and self.inside_moving_lambda:
-                continue
-            if var.name.startswith("self.") and self._move_condition(var):
+            if var.move_prohibited and self._move_condition(var):
                 continue
             if self.flag_fn:
                 if self.context.get_namespace(var) not in {namespace, ast.GLOBAL_NAMESPACE}:
@@ -1919,6 +1918,7 @@ class RustGenerator(Generator):
         self.context.add_lambda(initial_namespace, shadow_name, res)
         body = self._gen_func_body(ret_type)
         res.body = body
+        self.annotate_vars_in_lambda(body)
         
         self.depth = initial_depth
         self.namespace = initial_namespace
@@ -1928,6 +1928,17 @@ class RustGenerator(Generator):
         self.flag_FnMut = prev_flag_FnMut
         self.flag_FnOnce = prev_flag_FnOnce
         return res
+
+    def annotate_vars_in_lambda(self, node: Node):
+        """Traverse the AST subtree and annotate variables that are moved.
+        """
+        if isinstance(node, ast.Variable):
+            var_decl = self._get_decl_from_var(node)
+            if var_decl is not None:
+                var_decl.is_moved = self._type_moveable(var_decl)
+        for c in node.children():
+            self.annotate_vars_in_lambda(c)
+
 
     def gen_func_call(self,
                       etype: tp.Type,
@@ -2098,7 +2109,9 @@ class RustGenerator(Generator):
             if rt.is_function_trait(var_type):
                 if rt.is_FnMut(var_type) and getattr(var, 'is_final', True):
                     continue
-                if rt.is_FnOnce(var_type) and var.move_prohibited:
+                if rt.is_FnOnce(var_type) and (var.move_prohibited or self.inside_moving_lambda):
+                    continue
+                if var.get_type().is_type_var() and self.exclude_type_vars_closure:
                     continue
                     
             if not getattr(var_type, 'is_function_type', lambda: False)():
@@ -2610,7 +2623,8 @@ class RustGenerator(Generator):
                                exclude_arrays=exclude_arrays,
                                exclude_covariants=exclude_covariants,
                                exclude_contravariants=exclude_contravariants,
-                               exclude_type_vars=exclude_type_vars or self.exclude_type_vars_closure,
+                               exclude_type_vars=exclude_type_vars or \
+                                (self.exclude_type_vars_closure and self.inside_moving_lambda),
                                exclude_function_types=exclude_function_types,
                                exclude_usr_types=exclude_usr_types)
         stype = ut.random.choice(types)
@@ -2887,11 +2901,11 @@ class RustGenerator(Generator):
         self.move_semantics = True
         log(self.logger, "Generating function body with return type: {}".format(ret_type))
         expr_type = (
-            self.select_type(exclude_closure_types=True, ret_types=False)
+            self.select_type(ret_types=False)
             if ret_type == self.bt_factory.get_void_type()
             else ret_type
         )
-        self.exclude_type_vars_closure = True
+        self.exclude_type_vars_closure = (ret_type != self.bt_factory.get_void_type())
         expr = self.generate_expr(expr_type)
         self.exclude_type_vars_closure = False
         self.move_semantics = prev_move_semantics
@@ -3879,6 +3893,7 @@ class RustGenerator(Generator):
         else:
             struct = self.gen_struct_decl(struct_name)
             s_type, type_var_map = _inst_type_constructor(struct)
+        
         #Type parameters used in final declaration of impl block are the ones that are also used in struct type instantiation
         s_type_params = s_type.type_args if s_type.is_parameterized() else []
         impl_type_params = [t_param for t_param in impl_type_params if t_param in s_type_params]
