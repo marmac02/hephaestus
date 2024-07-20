@@ -1,9 +1,6 @@
-#GENERATOR for Rust
-
 """
-This file includes the program generator for Rust specific features.
+This file includes the program generator for Rust
 """
-# pylint: disable=too-many-instance-attributes,too-many-arguments,dangerous-default-value
 from src.generators.generator import Generator
 import functools
 from collections import defaultdict
@@ -14,14 +11,13 @@ from src import utils as ut
 from src.generators import generators as gens
 from src.generators import utils as gu
 from src.generators.config import cfg
-from src.ir import ast, types as tp, type_utils as tu, kotlin_types as kt
+from src.ir import ast, types as tp, type_utils as tu, rust_types as rt
 from src.ir.context import Context
 from src.ir.builtins import BuiltinFactory
 from src.ir import BUILTIN_FACTORIES
 from src.modules.logging import Logger, log
 
 class RustGenerator(Generator):
-    # TODO document
     def __init__(self,
                  language=None,
                  options={},
@@ -34,10 +30,7 @@ class RustGenerator(Generator):
         self.bt_factory: BuiltinFactory = BUILTIN_FACTORIES[language]
         self.depth = 1
         self._vars_in_context = defaultdict(lambda: 0)
-        self._new_from_class = None
         self.namespace = ('global',)
-        self.enable_pecs = not language == 'kotlin'
-        self.disable_variance_functions = True #disabled for now
         self._field_vars = {} #maps impl block ids to available field variables
         self.move_semantics = False #flag to handle move semantics in Rust
         self.instantiation_depth = 2 #depth of type instantiation during concretization
