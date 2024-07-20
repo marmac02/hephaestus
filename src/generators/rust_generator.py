@@ -3583,7 +3583,11 @@ class RustGenerator(Generator):
     # Where
 
     def _create_type_params_from_etype(self, etype: tp.Type):
-        type_params = list(set(self._retrieve_type_params(etype)))
+        type_params = []
+        retrieved_type_params = self._retrieve_type_params(etype)
+        for t_param in retrieved_type_params:
+            if t_param not in type_params:
+                type_params.append(t_param)
         mapping = {tv : tv for tv in type_params}
         return type_params, mapping, False
 
