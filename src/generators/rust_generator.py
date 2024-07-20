@@ -134,7 +134,7 @@ class RustGenerator(Generator):
             ret_type=self.bt_factory.get_void_type(),
             body=None,
             func_type=ast.FunctionDeclaration.FUNCTION)
-        self._add_node_to_parent(self.namespace, main_func)
+        self._add_node_to_parent(ast.GLOBAL_NAMESPACE, main_func)
         expr = self.generate_expr()
         decls = list(self.context.get_declarations(
             self.namespace, True).values())
