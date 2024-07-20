@@ -274,7 +274,6 @@ def process_cp_transformations(pid, dirname, translator, proc,
             )
     if program_str is None:
         program_str = utils.translate_program(translator, program)
-    program_str += "\nfn main() { }" #added for Rust CHANGE THIS
     dst_file = os.path.join(dirname, package_name,
                             translator.get_filename())
     dst_file2 = os.path.join(cli_args.test_directory, 'tmp', str(pid),
