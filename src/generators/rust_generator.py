@@ -364,6 +364,8 @@ class RustGenerator(Generator):
                 continue
             if var.move_prohibited and self._move_condition(var):
                 continue
+            if self.inside_moving_lambda and var.name.startswith("self."):
+                continue
             if self.flag_fn:
                 if self.context.get_namespace(var) not in {namespace, ast.GLOBAL_NAMESPACE}:
                     continue
