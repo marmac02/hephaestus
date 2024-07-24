@@ -5,7 +5,7 @@ from src.compilers.base import BaseCompiler
 class RustCompiler(BaseCompiler):
     ERROR_REGEX = re.compile(
         r"error(?:\[\w+\])?: (.*?)\n\s+-->\s+(.*\.rs):(\d+:\d+)", re.MULTILINE)
-    CRASH_REGEX = re.compile(r"thread '.*' panicked at '.*'")
+    CRASH_REGEX = re.compile(r"thread .* panicked at .*")
 
     def __init__(self, input_name, filter_patterns=None):
         input_name = os.path.join(input_name, '*', '*.rs')
