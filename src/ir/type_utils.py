@@ -6,6 +6,7 @@ import src.ir.context as ctx
 import src.ir.builtins as bt
 from src.ir import ast
 from src import utils
+from src.generators.config import cfg
 
 
 TypeVarMap = TypeVar('TypeVarMap', bound=Dict[tp.TypeParameter, tp.Type])
@@ -22,8 +23,6 @@ A boolean map that specifies if in place of a TypeParameter we can use
 use-site variance. The first value is for covariance
 and the second for contravariance.
 """
-#Flag is true if type utils is used for Rust
-flag_for_rust = False
 
 def _replace_type_argument(base_targ: tp.Type, bound: tp.Type, types,
                            has_type_variables):
@@ -209,7 +208,7 @@ def _construct_related_types(etype: tp.ParameterizedType, types, get_subtypes,
                 # type.
                 return etype
             # Type argument should not be primitives (for languages other than Rust).
-            if not flag_for_rust:
+            if cfg.bt_factory.get_language() != "rust":
                 t_args = [t for t in t_args if not t.is_primitive()]
             t_arg = utils.random.choice(t_args)
             type_var_map[t_param] = t_arg

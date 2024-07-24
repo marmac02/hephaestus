@@ -7,6 +7,7 @@ from src.transformations.type_erasure import TypeErasure
 from src.transformations.type_overwriting import TypeOverwriting
 from src.utils import random, read_lines, load_program
 from src.modules.logging import Logger
+from src.generators.config import cfg
 
 
 class ProgramProcessor():
@@ -96,7 +97,8 @@ class ProgramProcessor():
         generator = generator_class(
             language=self.args.language,
             logger=logger,
-            options=self.args.options["Generator"])
+            options=self.args.options["Generator"],)
+        cfg.bt_factory = generator.bt_factory
         program = generator.generate()
         return program, True
 
