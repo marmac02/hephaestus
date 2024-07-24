@@ -34,16 +34,14 @@ class RustGenerator(Generator):
 
         #maps impl block ids to available field variables
         self._field_vars = {}
-        self.move_semantics = False #flag to handle move semantics in Rust
+
+        #flag to handle move semantics in Rust
+        self.move_semantics = False
 
         #Map describing impl blocks. It maps struct_names to tuples
         self._impls = {}
 
-        # This flag is used for Java lambdas where local variables references
-        # must be final.
-        self._inside_java_lambda = False
-
-        #This flag is used for Rust inner functions that cannot capture outer variables
+        #This flag is used for Rust inner functions
         self._inside_inner_function = False
 
         #This flag is used for Rust to handle function calls in inner functions inside trait declarations
@@ -65,16 +63,9 @@ class RustGenerator(Generator):
         self.declaration_namespace = None
         self.int_stream = iter(range(1, 10000))
         self._in_super_call = False
-        # We use this data structure to store blacklisted classes, i.e.,
-        # classes that are incomplete (we do not have the information regarding
-        # their fields and functions yet). So, we avoid instantiating these
-        # classes or using them as supertypes, because we do not have the
-        # complete information about them.
-        self._blacklisted_classes: set = set()
-        self._blacklisted_traits: set = set() #for Rust
-        self._blacklisted_structs: set = set() #for Rust
-        tu.flag_for_rust = True
-        func_type = self.function_types[1]
+
+        self._blacklisted_traits: set = set()
+        self._blacklisted_structs: set = set()
 
     ### Entry Point Generators ###
 
@@ -468,8 +459,6 @@ class RustGenerator(Generator):
                            self.namespace[-2] != 'global' and
                            self.namespace[-2][0].islower())
 
-        prev_inside_java_lamdba = self._inside_java_lambda
-        self._inside_java_lambda = nested_function and self.language == "java"
         prev_inside_inner_function = self._inside_inner_function
         self._inside_inner_function = nested_function and self.language == "rust"
         # Type parameters of functions cannot be variant.
@@ -543,7 +532,6 @@ class RustGenerator(Generator):
         if func.body is not None:
             body = self._gen_func_body(ret_type)
         func.body = body
-        self._inside_java_lambda = prev_inside_java_lamdba
         self._inside_inner_function = prev_inside_inner_function
         self.depth = initial_depth
         self.namespace = initial_namespace
@@ -1273,8 +1261,6 @@ class RustGenerator(Generator):
         """
         variables = []
         for var in self.context.get_vars(namespace=self.namespace, only_current=only_current_namespace).values():
-            if self._inside_java_lambda:
-                continue
             if not getattr(var, 'is_final', True):
                 variables.append((None, var))
                 continue
@@ -1498,13 +1484,6 @@ class RustGenerator(Generator):
         # Get all variables declared in the current namespace or
         # the outer namespace.
         variables = self.context.get_vars(self.namespace).values()
-        # Case where we want only final variables
-        # Or variables declared in the nested function
-        if self._inside_java_lambda:
-            variables = list(filter(
-                lambda v: (getattr(v, 'is_final', False) or v not in
-                    self.context.get_vars(self.namespace[:-1]).values()),
-                variables))
         if self._inside_inner_function: # Variables declared in the inner function or globals for Rust
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
         else:
@@ -1915,9 +1894,6 @@ class RustGenerator(Generator):
         initial_depth = self.depth
         self.depth += 1
 
-        prev_inside_java_lamdba = self._inside_java_lambda
-        self._inside_java_lambda = self.language == "java"
-
         params = params if params is not None else self._gen_func_params()
         param_types = [p.param_type for p in params]
         for p in params:
@@ -1934,7 +1910,6 @@ class RustGenerator(Generator):
         
         self.depth = initial_depth
         self.namespace = initial_namespace
-        self._inside_java_lambda = prev_inside_java_lamdba
         self._inside_inner_function = prev_inside_inner_function
         return res
 
@@ -2096,11 +2071,6 @@ class RustGenerator(Generator):
         refs = []
         # Search for function references in current scope
         variables = self.context.get_vars(self.namespace).values()
-        if self._inside_java_lambda:
-            variables = list(filter(
-                lambda v: (getattr(v, 'is_final', False) or (
-                    v not in self.context.get_vars(self.namespace[:-1]).values())),
-                variables))
         if self._inside_inner_function: # function references only in current scope for Rust
             variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())
         for var in variables:
@@ -2858,11 +2828,6 @@ class RustGenerator(Generator):
 
         # Get variables without receivers
         variables = list(self.context.get_vars(self.namespace).values())
-        if self._inside_java_lambda:
-            variables = list(filter(
-                lambda v: (getattr(v, 'is_final', False) or (
-                    v not in self.context.get_vars(self.namespace[:-1]).values())),
-                variables))
         variables += list(self.context.get_vars(
             ('global',), only_current=True).values())
         for var_decl in variables:
@@ -2987,12 +2952,7 @@ class RustGenerator(Generator):
             etype: signature type
             inside_lambda: true if we want to generate parameters for a lambda
         """
-        if inside_lambda:
-            prev_inside_java_lamdba = self._inside_java_lambda
-            self._inside_java_lambda = self.language == "java"
         params = [self.gen_param_decl(et) for et in etype.type_args[:-1]]
-        if inside_lambda:
-            self._inside_java_lambda = prev_inside_java_lamdba
         ret_type = etype.type_args[-1]
         return ret_type, params
 
