@@ -2,7 +2,6 @@ from src.ir import ast, rust_types as rt, types as tp
 from src.translators.base import BaseTranslator
 from src.ir.context import get_decl
 
-#modify maybe
 def append_to(visit):
     def inner(self, node):
         self._nodes_stack.append(node)
@@ -49,12 +48,12 @@ class RustTranslator(BaseTranslator):
     def get_incorrect_filename():
         return RustTranslator.incorrect_filename
         
-    def type_arg2str(self, t_arg): #check if correct
+    def type_arg2str(self, t_arg):
         if not isinstance(t_arg, tp.WildCardType):
             return self.get_type_name(t_arg)
         return "type_arg2str ERROR"
 
-    def get_type_name(self, t): #check if correct
+    def get_type_name(self, t):
         if t.is_wildcard():
             t = t.get_bound_rec()
             return self.get_type_name(t)
@@ -77,13 +76,11 @@ class RustTranslator(BaseTranslator):
     def _parent_is_block(self):
         return isinstance(self._nodes_stack[-2], ast.Block)
 
-    #??? might be wrong
     def _is_global_scope(self):
         return len(self._nodes_stack) == 1
 
     def _is_func_in_trait(self, func_name):
         funcs = self.context.get_all_func_decl()
-        #assert func_name in funcs.keys(), "Function not found in context"
         if not func_name in funcs.keys():
             #if function is not found then it is a variable of function type
             return False
@@ -127,8 +124,7 @@ class RustTranslator(BaseTranslator):
             else ""
         )
         if children_res:
-            res +=  children_res[-1] + last_char + "\n" #+ \
-                   #" " * self.indent
+            res +=  children_res[-1] + last_char + "\n"
         else:
             res += " " * self.indent + last_char + "\n" + \
                    " " * self.indent
@@ -143,7 +139,7 @@ class RustTranslator(BaseTranslator):
         self.indent += 2
         children = node.children()
         prev_is_unit = self.is_unit
-        self.is_unit = node.get_type() == rt.Unit #??? might be wrong/irrelevant
+        self.is_unit = node.get_type() == rt.Unit
         prev_cast_number = self._cast_number
         is_expression = not isinstance(node.body, ast.Block)
         if is_expression:
@@ -155,13 +151,6 @@ class RustTranslator(BaseTranslator):
         len_params = len(node.params)
         len_type_params = len(node.type_parameters)
         type_parameters_res = ", ".join(children_res[len_params:len_type_params + len_params])
-        #if self._is_func_in_trait(node.name):
-        #    param_res = ["&self"] + param_res
-
-        #type params implement Copy trait to avoid move issues CHANGE THIS
-        #type_parameters_res = " :Copy, ".join(children_res[len_params:len_type_params + len_params])
-        #type_parameters_res += " :Copy" if type_parameters_res else ""
-
         body_res = children_res[-1] if node.body else ""
         prefix = " " * old_indent
         type_params = "<" + type_parameters_res + ">" if type_parameters_res else ""
@@ -180,7 +169,7 @@ class RustTranslator(BaseTranslator):
         if isinstance(param_type, tp.SelfType): #parameter is self
             res = "&self"
         else:
-            res = node.name + ": " + self.get_type_name(param_type) #??? handle vararg 
+            res = node.name + ": " + self.get_type_name(param_type)
         return res
 
     @append_to
@@ -278,15 +267,9 @@ class RustTranslator(BaseTranslator):
         self.indent = old_indent
         param_res = [children_res[i] for i,_ in enumerate(node.params)]
         body_res = children_res[-1] if node.body else ""
-        '''ret_type_str = (
-            ": " + self.get_type_name(node.ret_type)
-            if node.ret_type
-            else ""
-        )'''
-        res = "|{params}| {body}".format( #??? is ret even allowed in Rust
+        res = "|{params}| {body}".format(
             params=", ".join(param_res),
             body=body_res,
-            #ret = ret_type_str
         )
         self.indent = old_indent
         self.is_unit = prev_is_unit
@@ -317,8 +300,6 @@ class RustTranslator(BaseTranslator):
                 return str(literal) + "as u64"
             if integer_type == rt.U128:
                 return str(literal) + "as u128"
-            #if integer_type == rt.Number:
-            #    return str(literal) + "as i32" #??? is this default cast
             return str(literal)
         if not self._cast_number:
             return "{indent}{literal}{semicolon}".format(
@@ -332,7 +313,6 @@ class RustTranslator(BaseTranslator):
             semicolon="" if self._parent_is_block() else ""
         )
 
-    #??? must be revisited
     @append_to
     def visit_bottom_constant(self, node):
         bottom = "unimplemented!()"
@@ -345,8 +325,6 @@ class RustTranslator(BaseTranslator):
                 return str(literal) + "as f32"
             if real_type == rt.F64:
                 return str(literal) + "as f64"
-            #if real_type == jt.Number:
-            #    return "(Number) new Double(" + str(literal) + ")"
             return str(literal)
 
         if not self._cast_number:
@@ -363,27 +341,24 @@ class RustTranslator(BaseTranslator):
 
     @append_to
     def visit_char_constant(self, node):
-        return "{indent} '{literal}'{semicolon}".format(
+        return "{indent} '{literal}'".format(
             indent=" " * self.indent,
             literal=node.literal,
-            semicolon="" if self._parent_is_block() else ""
         )
 
     #for now only String type supported
     @append_to
     def visit_string_constant(self, node):
-        return "{indent}\"{literal}\".to_string(){semicolon}".format(
+        return "{indent}\"{literal}\".to_string()".format(
             indent=" " * self.indent,
             literal=node.literal,
-            semicolon="" if self._parent_is_block() else ""
         )
 
     @append_to
     def visit_boolean_constant(self, node):
-        return "{indent}{literal}{semicolon}".format(
+        return "{indent}{literal}".format(
             indent=" " * self.indent,
             literal=str(node.literal),
-            semicolon="" if self._parent_is_block() else ""
         )
 
     @append_to
@@ -410,7 +385,6 @@ class RustTranslator(BaseTranslator):
             c.accept(self)
         children_res = self.pop_children_res(children)
         res = "({left} {operator} {right}){semicolon}".format(
-            #indent=" " * old_indent,
             left=children_res[0],
             operator=node.operator,
             right=children_res[1],
@@ -440,10 +414,9 @@ class RustTranslator(BaseTranslator):
     
     @append_to
     def visit_variable(self, node):
-        return "{indent}{name}{semicolon}".format(
+        return "{indent}{name}".format(
             indent=" " * self.indent if self._parent_is_block() else "",
             name=node.name,
-            semicolon="" if self._parent_is_block() else "" #???
         )
 
     @append_to
@@ -459,7 +432,7 @@ class RustTranslator(BaseTranslator):
             c.accept(self)
         children_res = self.pop_children_res(children)
         if self._is_global_scope():
-            #static variables must have type annotation and be immutable (mutable only with unsafe)
+            #static variables must have type annotation and be immutable
             res = "static " + node.name + ": " + self.get_type_name(node.var_type) + " = " + children_res[0] + ";"
         else:
             mut = "let " if node.is_final else "let mut "
@@ -481,14 +454,13 @@ class RustTranslator(BaseTranslator):
         children_res = self.pop_children_res(children)
         res = "{indent}(if {cond} {true} \n{indent}else {false})".format(
             indent=" " * old_indent,
-            cond=children_res[0],#[self.indent:],
+            cond=children_res[0],
             true=children_res[1],
             false=children_res[2]
         )
         self.indent = old_indent
         return res
     
-    #extend to handle field assignments
     @append_to
     def visit_assign(self, node):
         old_indent = self.indent
@@ -500,14 +472,16 @@ class RustTranslator(BaseTranslator):
         self.indent = old_indent
         children_res = self.pop_children_res(children)
         if node.receiver:
-            receiver_expr = children_res[0] + '.' #??? consider BottomConstant
+            receiver_expr = children_res[0] + '.'
+            assign_expr = children_res[1]
         else:
             receiver_expr = ''
+            assign_expr = children_res[0]
         res = "{indent}{receiver_expr}{name} = {value}".format(
             indent=" " * old_indent,
             receiver_expr=receiver_expr,
             name=node.name,
-            value=children_res[0]
+            value=assign_expr
         )
         self.indent = old_indent
         self._cast_number = prev_cast_number
@@ -516,10 +490,6 @@ class RustTranslator(BaseTranslator):
     @append_to
     def visit_new(self, node):
         return "unimplemented!()"
-    
-    @append_to
-    def visit_supertrait_instantiation(self, node):
-        return self.get_type_name(node.trait_type)
     
     @append_to
     def visit_trait_decl(self, node):
@@ -639,7 +609,6 @@ class RustTranslator(BaseTranslator):
             receiver=receiver_expr,
             name=node.field
         )
-        #function call on struct field requires bracketing
         self.indent = old_indent
         return res
     
@@ -657,8 +626,8 @@ class RustTranslator(BaseTranslator):
         res = "{indent}impl{params} {trait} for {struct} {{\n".format(
             indent = " "*old_indent,
             params = "<" + ", ".join(type_parameters_res) + ">" if type_parameters_res else "",
-            trait = self.get_type_name(node.trait), #??? check if correct
-            struct = self.get_type_name(node.struct) #??? check if correct
+            trait = self.get_type_name(node.trait),
+            struct = self.get_type_name(node.struct)
         )
         if functions_res:
             res += "\n".join(functions_res)
