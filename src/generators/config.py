@@ -33,6 +33,11 @@ class ClassLimits:
 
 
 @dataclass
+class TraitLimits:
+    max_concretization_depth:int
+
+
+@dataclass
 class FunctionLimits:
     max_side_effects: int
     max_params: int
@@ -42,6 +47,7 @@ class FunctionLimits:
 class GenLimits:
     cls: ClassLimits
     fn: FunctionLimits
+    trait: TraitLimits
     max_var_decls: int  # max variable declarations in a scope.
     max_type_params: int # max type parameters in parameterized classes and functions
     max_functional_params: int # max number of parameters in functional interfaces
@@ -80,6 +86,9 @@ class GenConfig(metaclass=Singleton):
             fn=FunctionLimits(
                 max_side_effects=1,
                 max_params=2
+            ),
+            trait=TraitLimits(
+                max_concretization_depth=2
             ),
             max_var_decls=3,
             max_type_params=3,

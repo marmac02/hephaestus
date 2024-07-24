@@ -31,9 +31,10 @@ class RustGenerator(Generator):
         self.depth = 1
         self._vars_in_context = defaultdict(lambda: 0)
         self.namespace = ('global',)
-        self._field_vars = {} #maps impl block ids to available field variables
+
+        #maps impl block ids to available field variables
+        self._field_vars = {}
         self.move_semantics = False #flag to handle move semantics in Rust
-        self.instantiation_depth = 2 #depth of type instantiation during concretization
 
         #Map describing impl blocks. It maps struct_names to tuples
         self._impls = {}
@@ -223,7 +224,7 @@ class RustGenerator(Generator):
                 continue
             trait_type = t_param.bound
             for (impl, _, _) in sum(self._impls.values(), []):
-                if visited_counter[impl.name] > self.instantiation_depth:
+                if visited_counter[impl.name] > cfg.limits.trait.max_concretization_depth:
                     continue
                 if not impl.trait.has_type_variables():
                     if impl.trait == trait_type and is_struct_compatible(impl.struct, t, {}):
@@ -280,7 +281,7 @@ class RustGenerator(Generator):
                 trait_type.type_args = [self.concretize_type(t_arg, prev_type_map, visited_counter) for t_arg in trait_type.type_args]
             impl_list = sum(self._impls.values(), [])
             for (impl, _, _) in impl_list:
-                if impl.trait.name != trait_type.name or visited_counter[impl.name] > self.instantiation_depth:
+                if impl.trait.name != trait_type.name or visited_counter[impl.name] > cfg.limits.trait.max_concretization_depth:
                     #Impl is not for the trait_type
                     continue
                 visited_counter[impl.name] += 1
