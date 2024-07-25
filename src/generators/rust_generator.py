@@ -57,12 +57,11 @@ class RustGenerator(Generator):
         # In some case we need to use two namespaces. One for having access
         # to variables from scope, and one for adding new declarations.
         # In most cases one namespace is enough, but in cases like
-        # `generate_expr` in `_gen_func_params_with_default` we need both
-        # namespaces. To use one namespace we must model scope better.
+        # `generate_expr` we need both namespaces.
+        # To use one namespace we must model scope better.
         # Almost always declaration_namespace is set to None to be ignored
         self.declaration_namespace = None
         self.int_stream = iter(range(1, 10000))
-        self._in_super_call = False
 
         self._blacklisted_traits: set = set()
         self._blacklisted_structs: set = set()
@@ -88,9 +87,11 @@ class RustGenerator(Generator):
         Top-level declarations are defined in the global scope.
         Top-level declarations can be:
 
-        * Variable Declarations
-        * Class Declarations
+        * Static Variable Declarations
         * Function Declarations
+        * Struct Declarations
+        * Trait Declarations
+        * Impl Blocks
 
         NOTE that a top-level declaration can generate more top-level
         declarations.
@@ -102,7 +103,6 @@ class RustGenerator(Generator):
             self.gen_trait_decl,
             self.gen_impl,
         ]
-        #candidates.extend(self.lang_obs.get_top_levl_decl())
         gen_func = ut.random.choice(candidates)
         gen_func()
 
@@ -326,8 +326,6 @@ class RustGenerator(Generator):
     ### Generators ###
 
     ##### Declarations #####
-    # FunctionDeclaration, ParameterDeclaration, ClassDeclaration,
-    # FieldDeclaration, and VariableDeclaration
 
     def _get_decl_from_var(self, var):
         var_decls = self.context.get_vars(self.namespace)
@@ -398,8 +396,8 @@ class RustGenerator(Generator):
         """
         trait_type_params = []
         ns = self.namespace
-        if len(ns) > 2 and ns[1][0].isupper():
-            trait_name = ns[1]
+        if len(ns) > 2 and ns[-2][0].isupper():
+            trait_name = ns[-2]
             trait_decl = self.context.get_traits(self.namespace)[trait_name]
             return trait_decl.type_parameters
         return []
@@ -407,28 +405,24 @@ class RustGenerator(Generator):
     def gen_func_decl(self,
                       etype:tp.Type=None,
                       not_void=False,
-                      class_is_final=False,
                       func_name:str=None,
                       params:List[ast.ParameterDeclaration]=None,
-                      abstract=False,
-                      is_interface=False,
+                      is_signature=False,
                       trait_func=False,
                       type_params:List[tp.TypeParameter]=None,
                       namespace=None) -> ast.FunctionDeclaration:
         """Generate a function declaration.
 
         This method is responsible for generating all types of function/methods,
-        i.e. functions, class methods, nested functions. Furthermore, it also
+        i.e. functions, trait methods, nested functions. Furthermore, it also
         generates parameterized functions.
 
         Args:
             etype: expected return type.
             not_void: do not return void.
-            class_is_final: function of a final class.
             func_name: function name.
             params: list of parameter declarations.
-            abstract: function of an abstract class.
-            is_interface: function of an interface.
+            is_signature: function is a signature (without body).
             type_params: list of type parameters for parameterized function.
             namespace: set explicit namespace.
 
@@ -443,15 +437,9 @@ class RustGenerator(Generator):
             self.namespace += (func_name,)
         initial_depth = self.depth
         self.depth += 1
-        # Check if this function we want to generate is a class method, by
-        # checking the name of the outer namespace. If we are in class then
-        # the outer namespace begins with capital letter.
-        class_method = self.namespace[-2][0].isupper()
-        class_method = (False if len(self.namespace) < 2 else
-                        self.namespace[-2][0].isupper())
-        can_override = abstract or is_interface or (class_method and not
-                                    class_is_final and ut.random.bool())
-        trait_func = self.namespace[-2][0].isupper() #check if function is declared in a trait
+
+        #check if function is declared in a trait
+        trait_func = self.namespace[-2][0].isupper() 
         # Check if this function we want to generate is a nested functions.
         # To do so, we want to find if the function is directly inside the
         # namespace of another function.
@@ -460,62 +448,41 @@ class RustGenerator(Generator):
                            self.namespace[-2][0].islower())
 
         prev_inside_inner_function = self._inside_inner_function
-        self._inside_inner_function = nested_function and self.language == "rust"
-        # Type parameters of functions cannot be variant.
-        # Also note that at this point, we do not allow a conflict between
-        # type variable names of class and type variable names of functions.
-        # TODO consider being less conservative.
-        if (not nested_function and not trait_func): #or (nested_function and self.language == 'rust'): #nested functions in Rust can be parameterized
+        self._inside_inner_function = nested_function
+
+        if (not nested_function and not trait_func):
             if type_params is not None:
                 for t_p in type_params:
                     # We add the types to the context.
                     self.context.add_type(self.namespace, t_p.name, t_p)
             else:
-                # Type parameters of parameterized functions can be neither
-                # covariant nor contravariant.
                 type_params = self.gen_type_params(
-                    with_variance=False,
                     blacklist=self._get_type_variable_names(),
                     for_function=True
                 ) if ut.random.bool(prob=cfg.prob.parameterized_functions) \
                   else []
 
         else:
-            # Nested functions cannot be parameterized (
-            # at least in Groovy, Java), because they are modeled as lambdas.
             type_params = []
         if params is not None:
             for p in params:
                 log(self.logger, "Adding parameter {} to context in gen_func_decl".format(p.name))
                 self._add_node_to_parent(self.namespace, p)
         else:
-            params = (
-                self._gen_func_params()
-                if (
-                    ut.random.bool(prob=0.25) or
-                    self.language == 'rust' or
-                    self.language == 'java' or
-                    self.language == 'groovy' and is_interface
-                )
-                else self._gen_func_params_with_default()
-            )
+            params = self._gen_func_params()
         ret_type = self._get_func_ret_type(params, etype, not_void=not_void)
-        if is_interface or (abstract and ut.random.bool()):
-            body, inferred_type = None, None
+        if is_signature:
+            body = None
         else:
-            # If we are going to generate a non-abstract method, we generate
-            # a temporary body as a placeholder.
             body = ast.BottomConstant(ret_type)
         type_params = self._remove_unused_type_params(type_params, [p.get_type() for p in params] + [ret_type])
-        type_params = self._add_used_type_params(type_params, params, ret_type) #for Rust
+        type_params = self._add_used_type_params(type_params, params, ret_type)
         if trait_func:
-            params = [ast.SelfParameter()] + params #adding &self parameter for Rust trait functions
+            #adding &self parameter for Rust trait methods
+            params = [ast.SelfParameter()] + params
         func = ast.FunctionDeclaration(
             func_name, params, ret_type, body,
-            func_type=(ast.FunctionDeclaration.CLASS_METHOD
-                       if class_method
-                       else ast.FunctionDeclaration.FUNCTION),
-            is_final=not can_override,
+            func_type=1,
             inferred_type=None,
             type_parameters=type_params,
             trait_func=trait_func,
@@ -535,236 +502,8 @@ class RustGenerator(Generator):
         self._inside_inner_function = prev_inside_inner_function
         self.depth = initial_depth
         self.namespace = initial_namespace
-        
         return func
 
-    # Where
-
-    def _gen_func_params_with_default(self) -> List[ast.ParameterDeclaration]:
-        """Generate function parameters that may include one with default.
-
-        It will generate at most one parameter with a default value.
-        """
-        has_default = False
-        params = []
-        for _ in range(ut.random.integer(0, cfg.limits.fn.max_params)):
-            param = self.gen_param_decl()
-            if not has_default:
-                has_default = ut.random.bool()
-            if has_default:
-                prev_decl_namespace = self.declaration_namespace
-                self.declaration_namespace = self.namespace
-                prev_namespace = self.namespace
-                self.namespace = self.namespace[:-1]
-                expr = self.generate_expr(param.get_type(), only_leaves=True)
-                self.namespace = prev_namespace
-                self.declaration_namespace = prev_decl_namespace
-                param.default = expr
-            params.append(param)
-        return params
-
-    def gen_param_decl(self, etype=None) -> ast.ParameterDeclaration:
-        """Generate a function Parameter Declaration.
-
-        Args:
-            etype: Parameter type.
-        """
-        name = gu.gen_identifier('lower')
-        if etype and etype.is_wildcard():
-            bound = etype.get_bound_rec()
-            param_type = bound or self.select_type(exclude_covariants=True)
-        else:
-            param_type = etype or self.select_type(exclude_covariants=True)
-        param = ast.ParameterDeclaration(name, param_type)
-        return param
-
-    def gen_class_decl(self,
-                       field_type: tp.Type=None,
-                       fret_type: tp.Type=None,
-                       not_void: bool=False,
-                       type_params: List[tp.TypeParameter]=None,
-                       class_name: str=None,
-                       signature: tp.ParameterizedType=None
-                       ) -> ast.ClassDeclaration:
-        """Generate a class declaration.
-
-        It generates all type of classes (regular, abstract, interface),
-        and it can also generate parameterized classes.
-
-        Args:
-            field_type: At least one field will have this type.
-            fret_type: At least one function will return this type.
-            not_void: Do not generate functions that return void.
-            type_params: List with type parameters.
-            class_name: Class name.
-            signature: Generate at least one function with the given signature.
-
-        Returns:
-            A class declaration node.
-        """
-        class_name = class_name or gu.gen_identifier('capitalize')
-        initial_namespace = self.namespace
-        self.namespace += (class_name,)
-        initial_depth = self.depth
-        self.depth += 1
-        class_type = gu.select_class_type(field_type is not None)
-        is_final = ut.random.bool() and class_type == \
-            ast.ClassDeclaration.REGULAR
-        type_params = type_params or self.gen_type_params(
-            with_variance=self.language in ['kotlin', 'scala'])
-        cls = ast.ClassDeclaration(
-            class_name,
-            class_type=class_type,
-            superclasses=[],
-            type_parameters=type_params,
-            is_final=is_final,
-            fields=[],
-            functions=[]
-        )
-        self._add_node_to_parent(ast.GLOBAL_NAMESPACE, cls)
-        self._blacklisted_classes.add(class_name)
-
-        super_cls_info = self._select_superclass(
-            class_type == ast.ClassDeclaration.INTERFACE)
-        if super_cls_info:
-            cls.superclasses = [super_cls_info.super_inst]
-            cls.supertypes = [c.class_type for c in cls.superclasses]
-        if not cls.is_interface():
-            self.gen_class_fields(cls, super_cls_info, field_type)
-
-        self.gen_class_functions(cls, super_cls_info,
-                                 not_void, fret_type, signature)
-        self._blacklisted_classes.remove(class_name)
-        self.namespace = initial_namespace
-        self.depth = initial_depth
-        return cls
-
-    # Where
-
-    def _select_superclass(self, only_interfaces: bool) -> gu.SuperClassInfo:
-        """
-        Select a superclass for a class.
-
-        Args:
-            only_interfaces: select an interface.
-
-        Returns:
-            SuperClassInfo object which includes: the super class declaration,
-                its TypeVarMap, and a SuperClassInstantiation for the selected
-                class.
-        """
-
-        current_cls = self.namespace[-1]
-
-        def is_cls_candidate(cls):
-            # A class should not inherit from itself to avoid circular
-            # dependency problems.
-            if cls.name == current_cls:
-                return False
-            if cls.name in self._blacklisted_classes:
-                return False
-            return not cls.is_final and (cls.is_interface()
-                                         if only_interfaces else True)
-
-        class_decls = [
-            c for c in self.context.get_classes(self.namespace).values()
-            if is_cls_candidate(c)
-        ]
-        if not class_decls:
-            return None
-        class_decl = ut.random.choice(class_decls)
-        if class_decl.is_parameterized():
-            cls_type, type_var_map = tu.instantiate_type_constructor(
-                class_decl.get_type(),
-                self.get_types(exclude_covariants=True,
-                               exclude_contravariants=True,
-                               exclude_arrays=True),
-                enable_pecs=self.enable_pecs,
-                disable_variance_functions=self.disable_variance_functions,
-                only_regular=True,
-            )
-        else:
-            cls_type, type_var_map = class_decl.get_type(), {}
-        con_args = None if class_decl.is_interface() else []
-        prev_super_call = self._in_super_call
-        self._in_super_call = True
-        for f in class_decl.fields:
-            field_type = tp.substitute_type(f.get_type(), type_var_map)
-            con_args.append(self.generate_expr(field_type,
-                                               only_leaves=True))
-        self._in_super_call = prev_super_call
-        return gu.SuperClassInfo(
-            class_decl,
-            type_var_map,
-            ast.SuperClassInstantiation(cls_type, con_args)
-        )
-
-    # And
-
-    def gen_class_fields(self,
-                         curr_cls: ast.ClassDeclaration,
-                         super_cls_info: gu.SuperClassInfo,
-                         field_type: tp.Type=None
-                        ) -> List[ast.FieldDeclaration]:
-        """Generate fields for a class.
-
-        It also adds the fields in the context.
-
-        Args:
-            curr_cls: Current class declaration.
-            super_cls_info: SuperClassInstantiation for curr_cls
-            field_type: At least one field will have this type.
-
-        Returns:
-            A list of field declarations
-        """
-        max_fields = cfg.limits.cls.max_fields - 1 if field_type \
-            else cfg.limits.cls.max_fields
-        fields = []
-        if field_type:
-            fields.append(self.gen_field_decl(field_type, curr_cls.is_final))
-        if not super_cls_info:
-            for _ in range(ut.random.integer(0, max_fields)):
-                fields.append(
-                    self.gen_field_decl(class_is_final=curr_cls.is_final))
-        else:
-            overridable_fields = super_cls_info.super_cls \
-                .get_overridable_fields()
-            k = ut.random.integer(0, min(max_fields, len(overridable_fields)))
-            if overridable_fields:
-                chosen_fields = ut.random.sample(overridable_fields, k=k)
-                for f in chosen_fields:
-                    field_type = tp.substitute_type(
-                        f.get_type(), super_cls_info.type_var_map)
-                    new_f = self.gen_field_decl(field_type, curr_cls.is_final,
-                                                add_to_parent=False)
-                    new_f.name = f.name
-                    new_f.override = True
-                    new_f.is_final = f.is_final
-                    fields.append(new_f)
-                    log(self.logger, "Adding field {} to context in gen_class_fields".format(new_f.name))
-                    self._add_node_to_parent(self.namespace, new_f)
-                max_fields = max_fields - len(chosen_fields)
-            if max_fields < 0:
-                return fields
-            for _ in range(ut.random.integer(0, max_fields)):
-                fields.append(
-                    self.gen_field_decl(class_is_final=curr_cls.is_final))
-        return fields
-
-    # Where
-
-    def _add_node_to_class(self, cls, node):
-        if isinstance(node, ast.FunctionDeclaration):
-            cls.functions.append(node)
-            return
-
-        if isinstance(node, ast.FieldDeclaration):
-            cls.fields.append(node)
-            return
-
-        assert False, ('Trying to put a node in class other than a function',
-                       ' and a field')
 
     def _add_node_to_struct(self, struct, node):
         if isinstance(node, ast.FieldDeclaration):
@@ -783,7 +522,6 @@ class RustGenerator(Generator):
     def _add_node_to_parent(self, parent_namespace, node):
         node_type = {
             ast.FunctionDeclaration: self.context.add_func,
-            ast.ClassDeclaration: self.context.add_class,
             ast.VariableDeclaration: self.context.add_var,
             ast.FieldDeclaration: self.context.add_var,
             ast.ParameterDeclaration: self.context.add_var,
@@ -798,8 +536,6 @@ class RustGenerator(Generator):
         parent = self.context.get_decl(parent_namespace[:-1],
                                        parent_namespace[-1])
         if parent:
-            if isinstance(parent, ast.ClassDeclaration):
-                self._add_node_to_class(parent, node)
             if isinstance(parent, ast.StructDeclaration):
                 self._add_node_to_struct(parent, node)
             if isinstance(parent, ast.TraitDeclaration):
@@ -807,247 +543,11 @@ class RustGenerator(Generator):
 
         node_type[type(node)](parent_namespace, node.name, node)
 
-
-    # And
-
-    def gen_class_functions(self,
-                            curr_cls, super_cls_info,
-                            not_void=False,
-                            fret_type=None,
-                            signature: tp.ParameterizedType=None
-                            ) -> List[ast.FunctionDeclaration]:
-        """Generate methods for a class.
-
-        If the method has a superclass, then it will try to implement any
-        method that must be implemented (e.g., abstract methods in regular
-        classes).
-
-        Args:
-            curr_cls: Current Class declaration
-            super_cls_info: SuperClassInstantiation for curr_cls
-            not_void: Do not create methods that return void.
-            fret_type: At least one method will return this type.
-            signature: Generate at least one function with the given signature.
-        """
-
-        funcs = []
-        max_funcs = cfg.limits.cls.max_funcs - 1 if fret_type \
-            else cfg.limits.cls.max_funcs
-        max_funcs = max_funcs - 1 if signature else max_funcs
-        abstract = not curr_cls.is_regular()
-        if fret_type:
-            funcs.append(
-                self.gen_func_decl(fret_type, not_void=not_void,
-                                   class_is_final=curr_cls.is_final,
-                                   abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
-        if signature:
-            ret_type, params = self._gen_ret_and_paramas_from_sig(signature)
-            funcs.append(
-                self.gen_func_decl(ret_type, params=params, not_void=not_void,
-                                   class_is_final=curr_cls.is_final,
-                                   abstract=abstract,
-                                   is_interface=curr_cls.is_interface()))
-        if not super_cls_info:
-            for _ in range(ut.random.integer(0, max_funcs)):
-                funcs.append(
-                    self.gen_func_decl(not_void=not_void,
-                                       class_is_final=curr_cls.is_final,
-                                       abstract=abstract,
-                                       is_interface=curr_cls.is_interface()))
-        else:
-            abstract_funcs = []
-            class_decls = self.context.get_classes(self.namespace).values()
-            if curr_cls.is_regular():
-                abstract_funcs = super_cls_info.super_cls\
-                    .get_abstract_functions(class_decls)
-                for f in abstract_funcs:
-                    funcs.append(
-                        self._gen_func_from_existing(
-                            f,
-                            super_cls_info.type_var_map,
-                            curr_cls.is_final,
-                            curr_cls.is_interface()
-                        )
-                    )
-                max_funcs = max_funcs - len(abstract_funcs)
-            overridable_funcs = super_cls_info.super_cls \
-                .get_overridable_functions()
-            abstract_funcs = {f.name for f in abstract_funcs}
-            overridable_funcs = [f for f in overridable_funcs
-                                 if f.name not in abstract_funcs]
-            len_over_f = len(overridable_funcs)
-            if len_over_f > max_funcs:
-                return funcs
-            k = ut.random.integer(0, min(max_funcs, len_over_f))
-            chosen_funcs = (
-                []
-                if not max_funcs or curr_cls.is_interface()
-                else ut.random.sample(overridable_funcs, k=k)
-            )
-            for f in chosen_funcs:
-                funcs.append(
-                    self._gen_func_from_existing(f,
-                                                 super_cls_info.type_var_map,
-                                                 curr_cls.is_final,
-                                                 curr_cls.is_interface()))
-            max_funcs = max_funcs - len(chosen_funcs)
-            if max_funcs < 0:
-                return funcs
-            for _ in range(ut.random.integer(0, max_funcs)):
-                funcs.append(
-                    self.gen_func_decl(not_void=not_void,
-                                       class_is_final=curr_cls.is_final,
-                                       abstract=abstract,
-                                       is_interface=curr_cls.is_interface()))
-        return funcs
-
-
-    # And
-
-    def _gen_func_from_existing(self,
-                                func: ast.FunctionDeclaration,
-                                type_var_map: tu.TypeVarMap,
-                                class_is_final: bool,
-                                is_interface: bool) -> ast.FunctionDeclaration:
-        """Generate a method that overrides an existing method.
-
-        Args:
-            func: Method to override.
-            type_var_map: TypeVarMap of func
-            class_is_final: is current class final.
-            is_interface: is current class an interface.
-
-        Returns:
-            A function declaration.
-        """
-        params = deepcopy(func.params)
-        type_params, substituted_type_params = \
-            self._gen_type_params_from_existing(func, type_var_map)
-        type_param_names = [t.name for t in type_params]
-        ret_type = func.ret_type
-        for p in params:
-            sub = False
-            sub_type_map = {
-                k: v for k, v in type_var_map.items()
-                if k.name not in type_param_names
-            }
-            old = p.get_type()
-            p.param_type = tp.substitute_type(p.get_type(), sub_type_map)
-            sub = old != p.get_type()
-            if not sub:
-                p.param_type = tp.substitute_type(p.get_type(),
-                                                  substituted_type_params)
-            p.default = None
-        sub = False
-        sub_type_map = {
-            k: v for k, v in type_var_map.items()
-            if k.name not in type_param_names
-        }
-        old = ret_type
-        ret_type = tp.substitute_type(ret_type, sub_type_map)
-        sub = old != ret_type
-        if not sub:
-            ret_type = tp.substitute_type(ret_type, substituted_type_params)
-        new_func = self.gen_func_decl(func_name=func.name, etype=ret_type,
-                                      not_void=False,
-                                      class_is_final=class_is_final,
-                                      params=params,
-                                      is_interface=is_interface,
-                                      type_params=type_params)
-        if func.body is None:
-            new_func.is_final = False
-        new_func.override = True
-        return new_func
-
-    # Where
-
-    def _gen_type_params_from_existing(self,
-                                       func: ast.FunctionDeclaration,
-                                       type_var_map
-                                      ) -> (List[tp.TypeParameter], tu.TypeVarMap):
-        """Gen type parameters for a function that overrides a parameterized
-            function.
-
-        Args:
-            func: Function to override.
-            type_var_map: TypeVarMap of func.
-
-        Returns:
-            A list of available type parameters, and TypeVarMap for the type
-            parameters of func
-        """
-        if not func.type_parameters:
-            return [], {}
-        substituted_type_params = {}
-        curr_type_vars = self._get_type_variable_names()
-        func_type_vars = [t.name for t in func.type_parameters]
-        class_type_vars = [t for t in curr_type_vars
-                           if t not in func_type_vars]
-        blacklist = func_type_vars + curr_type_vars + list(type_var_map.keys())
-        new_type_params = []
-        for t_param in func.type_parameters:
-            # Here, we substitute the bound of an overridden parameterized
-            # function based on the type arguments of the superclass.
-            new_type_param = deepcopy(t_param)
-            if t_param.name in curr_type_vars:
-                # The child class contains a type variable that has the
-                # same name with a type variable of the overridden function.
-                # So we change the name of the function's type variable to
-                # avoid the conflict.
-                new_name = ut.random.caps(blacklist=blacklist)
-                func_type_vars.append(new_name)
-                blacklist.append(new_name)
-                new_type_param.name = new_name
-                substituted_type_params[t_param] = new_type_param
-
-            if new_type_param.bound is not None:
-                sub = False
-                sub_type_map = {
-                    k: v for k, v in type_var_map.items()
-                    if k.name not in func_type_vars \
-                    or k.name not in class_type_vars
-                }
-                old = new_type_param.bound
-                bound = tp.substitute_type(new_type_param.bound,
-                                           sub_type_map)
-                sub = old != bound
-
-                if not sub:
-                    bound = tp.substitute_type(bound, substituted_type_params)
-                new_type_param.bound = bound
-            new_type_params.append(new_type_param)
-        return new_type_params, substituted_type_params
-
-    def gen_field_decl(self, etype=None,
-                       class_is_final=True,
-                       add_to_parent=True) -> ast.FieldDeclaration:
-        """Generate a class Field Declaration.
-
-        Args:
-            etype: Field type.
-            class_is_final: Is the class final.
-        """
-        name = gu.gen_identifier('lower')
-        can_override = not class_is_final and ut.random.bool()
-        is_final = ut.random.bool()
-        field_type = etype or self.select_type(exclude_contravariants=True,
-                                               exclude_covariants=not is_final)
-        field = ast.FieldDeclaration(name, field_type, is_final=is_final,
-                                     can_override=can_override)
-        if add_to_parent:
-            log(self.logger, "Adding field {} to context in gen_field_decl".format(field.name))
-            self._add_node_to_parent(self.namespace, field)
-        return field
-
-    #gen_global_variable_decl added for Rust
     def gen_global_variable_decl(self) -> ast.VariableDeclaration:
         """Generate a global Variable Declaration in Rust.
            Global (static) variable declarations are final, 
            and cannot contain function calls.
-           String disabled for now for str String compatibility issues
         """
-        #exclude string type for Rust for now, and Vec type
         available_types = [self.bt_factory.get_integer_type(),
                            self.bt_factory.get_float_type(),
                            self.bt_factory.get_boolean_type(),
@@ -1086,10 +586,6 @@ class RustGenerator(Generator):
         var_type = etype if etype else self.select_type()
         initial_depth = self.depth
         self.depth += 1
-        # NOTE maybe we should disable sam coercion for Kotlin
-        # the following code does not compile
-        # fun interface FI { fun foo(p: Int): Long }
-        # var v: FI = {x: Int -> x.toLong()}
         expr = expr or self.generate_expr(var_type, only_leaves,
                                           sam_coercion=True)
         if isinstance(expr, ast.Variable):
@@ -1098,7 +594,6 @@ class RustGenerator(Generator):
             vard.move_prohibited = self._type_moveable(vard)
         self.depth = initial_depth
         is_final = ut.random.bool()
-        # We cannot set ? extends X as the type of a variable.
         vtype = var_type.get_bound_rec() if var_type.is_wildcard() else \
             var_type
         var_decl = ast.VariableDeclaration(
@@ -1148,31 +643,14 @@ class RustGenerator(Generator):
         """
         if gen_bottom:
             return ast.BottomConstant(None)
-        '''
-        subtypes are irrelevant for now (will be when trait types introduced)
-        find_subtype = (
-            expr_type and
-            subtype and expr_type != self.bt_factory.get_void_type()
-            and ut.random.bool()
-        )
-        
-        if find_subtype:
-            subtypes = tu.find_subtypes(expr_type, self.get_types(),
-                                        include_self=True, concrete_only=True)
-            old_type = expr_type
-            expr_type = ut.random.choice(subtypes)
-            msg = "Found subtype of {}: {}".format(old_type, expr_type)
-            log(self.logger, msg)
-        '''
         expr_type = expr_type or self.select_type()
-        subtype = expr_type
         gen_var = (
             not only_leaves and
             expr_type != self.bt_factory.get_void_type() and
             self._vars_in_context[self.namespace] < cfg.limits.max_var_decls and
             ut.random.bool()
         )
-        generators = self.get_generators(expr_type, only_leaves, subtype,
+        generators = self.get_generators(expr_type, only_leaves, expr_type,
                                          exclude_var, sam_coercion=sam_coercion)
         prev_move_semantics = self.move_semantics
         self.move_semantics = True if gen_var else self.move_semantics
@@ -1180,11 +658,9 @@ class RustGenerator(Generator):
         self.move_semantics = prev_move_semantics
         # Make a probabilistic choice, and assign the generated expr
         # into a variable, and return that variable reference.
-        
         if gen_var:
             self._vars_in_context[self.namespace] += 1
             var_decl = self.gen_variable_decl(expr_type, only_leaves, expr=expr)
-            #restricting use of variable in next lines
             var_decl.is_moved = self._type_moveable(var_decl)
             var_decl.move_prohibited = self._type_moveable(var_decl)
             expr = ast.Variable(var_decl.name)
@@ -1206,20 +682,10 @@ class RustGenerator(Generator):
         prev_move_semantics = self.move_semantics
         self.move_semantics = True
         # Get all non-final variables for performing the assignment.
-        only_current_namespace = self.language == 'rust' and self._inside_inner_function
+        only_current_namespace = self._inside_inner_function
         variables = self._get_assignable_vars(only_current_namespace)
         initial_depth = self.depth
         self.depth += 1
-        ''' commented out for now for Rust
-        if not variables:
-            # Ok, it's time to find a class with non-final fields,
-            # generate an object of this class, and perform the assignment.
-            res = self._get_classes_with_assignable_fields()
-            if res:
-                expr_type, field = res
-                variables = [(self.generate_expr(expr_type,
-                                                only_leaves, subtype), field)]
-        '''
         if not variables:
             # Nothing of the above worked, so generate a 'var' variable,
             # and perform the assignment
@@ -1255,83 +721,25 @@ class RustGenerator(Generator):
 
     def _get_assignable_vars(self, only_current_namespace) -> List[ast.Variable]:
         """Get all non-final variables in context.
-
-        Note that variables inside lambdas in Java should be either final, or
-        effectively final.
         """
         variables = []
         for var in self.context.get_vars(namespace=self.namespace, only_current=only_current_namespace).values():
-            if not getattr(var, 'is_final', True):
-                variables.append((None, var))
+            if getattr(var, 'is_final', True):
                 continue
-            var_type = self._get_var_type_to_search(var.get_type())
-            if not var_type:
+            variables.append((None, var))
+            if var.is_moved:
                 continue
-            if isinstance(getattr(var_type, 't_constructor', None),
-                          self.function_type):
-                continue
-            
-            temp = self._get_class(var_type) #added for Rust
-            if temp is None:
-                continue
-            cls, type_var_map = temp
-
-            #cls, type_var_map = self._get_class(var_type)
-            for field in cls.fields:
-                # Ok here we create a new field whose type corresponds
-                # to the type argument with which the class 'c' is
-                # instantiated.
-                field_sub = ast.FieldDeclaration(
-                    field.name,
-                    field_type=tp.substitute_type(field.get_type(),
-                                                  type_var_map)
-                )
-                if not field.is_final:
-                    variables.append((ast.Variable(var.name), field_sub))
+            if var.get_type().name in self.context.get_structs(self.namespace).keys():
+                type_map = {}
+                if var.get_type().is_parameterized():
+                    type_map = dict(zip(var.get_type().t_constructor.type_parameters, var.get_type().type_args))
+                struct_decl = self.context.get_structs(self.namespace)[var.get_type().name]
+                for f in struct_decl.fields:
+                    updated_type = tp.substitute_type(f.get_type(), type_map)
+                    updated_field_decl = ast.FieldDeclaration(f.name, updated_type)
+                    variables.append((ast.Variable(var.name), updated_field_decl))
         return variables
 
-    # And
-
-    def _get_classes_with_assignable_fields(self):
-        """Get classes with non-final fields.
-
-        Returns:
-            A list that contains tuples of expressions that produce objects
-            of a class, and field declarations.
-        """
-        classes = []
-        class_decls = self.context.get_classes(self.namespace).values()
-        for c in class_decls:
-            for field in c.fields:
-                if not field.is_final:
-                    classes.append((c, field))
-        assignable_types = []
-        for c, f in classes:
-            t, type_var_map = c.get_type(), {}
-            if t.is_type_constructor():
-                variance_choices = {
-                    t_param: (False, True)
-                    for t_param in t.type_parameters
-                }
-                t, type_var_map = tu.instantiate_type_constructor(
-                    t, self.get_types(exclude_arrays=True),
-                    variance_choices=variance_choices,
-                    disable_variance_functions=self.disable_variance_functions,
-                    enable_pecs=self.enable_pecs
-                )
-                # Ok here we create a new field whose type corresponds
-                # to the type argument with which the class 'c' is
-                # instantiated.
-                f = ast.FieldDeclaration(
-                    f.name,
-                    field_type=tp.substitute_type(f.get_type(),
-                                                  type_var_map)
-                )
-            assignable_types.append((t, f))
-
-        if not assignable_types:
-            return None
-        return ut.random.choice(assignable_types)
 
     def gen_field_access(self,
                          etype: tp.Type,
@@ -1394,21 +802,6 @@ class RustGenerator(Generator):
             if etype2.is_primitive() and (
                     etype2 == self.bt_factory.get_void_type()):
                 type_map = None
-
-            #if can_wildcard:
-             #   variance_choices = gu.init_variance_choices(type_map)
-            #else:
-            variance_choices = None
-            '''s_type, params_map = tu.instantiate_type_constructor(
-                s.get_type(),
-                self.get_types(),
-                type_var_map=type_map,
-                enable_pecs=self.enable_pecs,
-                disable_variance_functions=self.disable_variance_functions,
-                variance_choices=variance_choices,
-                disable_variance=variance_choices is None
-            )
-            '''
             s_type, params_map = self.instantiate_type_constructor(s.get_type(), self.get_types(), type_map)
         else:
             s_type, params_map = s.get_type(), {}
@@ -1430,15 +823,9 @@ class RustGenerator(Generator):
         is_parameterized_func = isinstance(
             attr, ast.FunctionDeclaration) and attr.is_parameterized()
         if s.is_parameterized():
-            '''
-            s_type, params_map = tu.instantiate_type_constructor(
-                s.get_type(), self.get_types(), type_var_map=type_var_map,
-                disable_variance_functions=self.disable_variance_functions)
-            '''
             s_type, params_map = self.instantiate_type_constructor(s.get_type(), self.get_types(), type_var_map)
         else:
             s_type, params_map = s.get_type(), {}
-            #for now no support for parameterized functions implemented by structs
         return gu.AttrAccessInfo(s_type, params_map, attr, func_type_var_map)
 
     def _get_matching_struct_decls(self,
@@ -1484,8 +871,8 @@ class RustGenerator(Generator):
         # Get all variables declared in the current namespace or
         # the outer namespace.
         variables = self.context.get_vars(self.namespace).values()
-        if self._inside_inner_function: # Variables declared in the inner function or globals for Rust
-            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())# + list(self.context.get_vars(namespace=self.namespace, glob=True).values())
+        if self._inside_inner_function:
+            variables = list(self.context.get_vars(namespace=self.namespace, only_current=True).values())
         else:
             variables = list(variables) + self._get_field_vars()
         variables = [v for v in variables if (not v.is_moved) and (not self.move_semantics or not v.move_prohibited)]
@@ -1541,8 +928,6 @@ class RustGenerator(Generator):
             self.generate_expr(etype, only_leaves=only_leaves, subtype=subtype)
             for _ in range(arr_len)
         ]
-        # An array expression (i.e., emptyArray<T>(), arrayOf<T>) cannot
-        # take wildcards.
         self.move_semantics = prev_move_semantics
         return ast.ArrayExpr(expr_type.to_variance_free(), arr_len, exprs)
 
@@ -1563,8 +948,7 @@ class RustGenerator(Generator):
         self.move_semantics = False
         initial_depth = self.depth
         self.depth += 1
-        exclude_function_types = self.language == 'java' or self.language == 'rust'
-        etype = self.select_type(exclude_function_types=exclude_function_types, exclude_type_vars=True, exclude_usr_types=True)
+        etype = self.select_type(exclude_function_types=True, exclude_type_vars=True, exclude_usr_types=True)
         op = ut.random.choice(ast.EqualityExpr.VALID_OPERATORS[self.language])
         e1 = self.generate_expr(etype, only_leaves, subtype=False)
         e2 = self.generate_expr(etype, only_leaves, subtype=False)
@@ -1572,29 +956,6 @@ class RustGenerator(Generator):
         self.move_semantics = prev_move_semantics
         return ast.EqualityExpr(e1, e2, op)
 
-    # pylint: disable=unused-argument
-    def gen_logical_expr(self,
-                         expr_type=None,
-                         only_leaves=False) -> ast.LogicalExpr:
-        """Generate a logical expression
-
-        It generates two additional expression for the logical expression.
-
-        Args:
-            expr_type: exists for compatibility reasons.
-            only_leaves: do not generate new leaves except from `expr`.
-        """
-        initial_depth = self.depth
-        self.depth += 1
-        op = ut.random.choice(ast.LogicalExpr.VALID_OPERATORS[self.language])
-        e1 = self.generate_expr(self.bt_factory.get_boolean_type(),
-                                only_leaves)
-        e2 = self.generate_expr(self.bt_factory.get_boolean_type(),
-                                only_leaves)
-        self.depth = initial_depth
-        return ast.LogicalExpr(e1, e2, op)
-
-    # pylint: disable=unused-argument
     def gen_comparison_expr(self,
                             expr_type=None,
                             only_leaves=False) -> ast.ComparisonExpr:
@@ -1668,10 +1029,6 @@ class RustGenerator(Generator):
         e1 = self.generate_expr(e1_type, only_leaves)
         e2 = self.generate_expr(e2_type, only_leaves)
         self.depth = initial_depth
-        if self.language == 'java' and e1_type.name in ('Boolean', 'String'):
-            op = ut.random.choice(
-                ast.EqualityExpr.VALID_OPERATORS[self.language])
-            return ast.EqualityExpr(e1, e2, op)
         self.move_semantics = prev_move_semantics
         return ast.ComparisonExpr(e1, e2, op)
 
@@ -1696,172 +1053,12 @@ class RustGenerator(Generator):
                                   only_leaves)
         prev_move_semantics = self.move_semantics
         self.move_semantics = True
-        subtype = False #subtypes irrelevant for now
-        if subtype:
-            subtypes = tu.find_subtypes(etype, self.get_types(),
-                                        include_self=True, concrete_only=True)
-            true_type = ut.random.choice(subtypes)
-            false_type = ut.random.choice(subtypes)
-            tmp_t = ut.random.choice(subtypes)
-            # Find which of the given types is the supertype.
-            cond_type = functools.reduce(
-                lambda acc, x: acc if x.is_subtype(acc) else x,
-                [true_type, false_type],
-                tmp_t
-            )
-        else:
-            true_type, false_type, cond_type = etype, etype, etype
-        true_expr = ast.Block([self.generate_expr(true_type, only_leaves, subtype=False)], is_func_block = False) #TODO change this, enclosed in block only for Rust
-        false_expr = ast.Block([self.generate_expr(false_type, only_leaves, subtype=False)], is_func_block = False) #TODO change this, enclosed in block only for Rust
+        true_type, false_type, cond_type = etype, etype, etype
+        true_expr = ast.Block([self.generate_expr(true_type, only_leaves, subtype=False)], is_func_block = False)
+        false_expr = ast.Block([self.generate_expr(false_type, only_leaves, subtype=False)], is_func_block = False)
         self.depth = initial_depth
         self.move_semantics = prev_move_semantics
-        # Note that this an approximation of the type of the whole conditional.
-        # To properly estimate the type of conditional, we need to implement
-        # the LUB algorithm.
-        # Note the type passed in conditional may be imprecise in the following
-        # scenario:
-        # class A
-        # class B extends A
-        # class C extends B
-        # class D extends B
-        #
-        # gen_conditional with type A
-        # true branch type C
-        # false branch type D
-        #
-        # The type will assign to the conditional will be A, but the correct
-        # one is B.
         return ast.Conditional(cond, true_expr, false_expr, cond_type)
-
-    def gen_is_expr(self,
-                    expr_type: tp.Type,
-                    only_leaves=False,
-                    subtype=True) -> ast.Conditional:
-        """Generate an is expression.
-
-        If it cannot detect a subtype for the expr_type, then it just generates
-        a new expression of expr_type.
-
-        Args:
-            expr_type: type to smart cast.
-            only_leaves: do not generate new leaves except from `expr`.
-            subtype: The type of the sub expressions could be a subtype of
-                `expr_type`.
-
-        Returns:
-            A conditional with is.
-        """
-        def _get_extra_decls(namespace):
-            return [
-                v
-                for v in self.context.get_declarations(
-                    namespace, only_current=True).values()
-                if (isinstance(v, (ast.VariableDeclaration,
-                                  ast.FunctionDeclaration)))
-            ]
-
-        final_vars = [
-            v
-            for v in self.context.get_vars(self.namespace).values()
-            if (
-                # We can smart cast local variables that are final, have
-                # explicit types, and are not overridable.
-                isinstance(v, ast.VariableDeclaration) and
-                getattr(v, 'is_final', True) and
-                not v.is_type_inferred and
-                not getattr(v, 'can_override', True)
-            )
-        ]
-        if not final_vars:
-            return self.generate_expr(expr_type, only_leaves=True,
-                                      subtype=subtype)
-        prev_depth = self.depth
-        self.depth += 3
-        var = ut.random.choice(final_vars)
-        var_type = var.get_type()
-        subtypes = tu.find_subtypes(var_type, self.get_types(),
-                                    include_self=False, concrete_only=True)
-        subtypes = self._filter_subtypes(subtypes, var_type)
-        if not subtypes:
-            return self.generate_expr(expr_type, only_leaves=True,
-                                      subtype=subtype)
-
-        subtype = ut.random.choice(subtypes)
-        initial_decls = _get_extra_decls(self.namespace)
-        prev_namespace = self.namespace
-        self.namespace += ('true_block',)
-        # Here, we create a 'virtual' variable declaration inside the
-        # namespace of the block corresponding to the true branch. This
-        # variable has the same name with the variable that appears in
-        # the left-hand side of the 'is' expression, but its type is the
-        # selected subtype.
-        log(self.logger, "Adding variable {} to context in gen_is_expr".format(var.name))
-        self.context.add_var(self.namespace, var.name,
-            ast.VariableDeclaration(
-                var.name,
-                ast.BottomConstant(var.get_type()),
-                var_type=subtype))
-        true_expr = ast.Block(self.generate_expr(expr_type), is_func_block = False) #TODO change this, enclosed in block only for Rust  true_expr = self.generate_expr(expr_type) 
-        # We pop the variable from context. Because it's no longer used.
-        self.context.remove_var(self.namespace, var.name)
-        extra_decls_true = [v for v in _get_extra_decls(self.namespace)
-                            if v not in initial_decls]
-        if extra_decls_true:
-            true_expr = ast.Block(extra_decls_true + [true_expr],
-                                  is_func_block=False)
-        self.namespace = prev_namespace + ('false_block',)
-        false_expr = ast.Block([self.generate_expr(expr_type, only_leaves=only_leaves,
-                                        subtype=subtype)], is_func_block = False) #TODO change this, enclosed in block only for Rust
-        extra_decls_false = [v for v in _get_extra_decls(self.namespace)
-                             if v not in initial_decls]
-        if extra_decls_false:
-            false_expr = ast.Block(extra_decls_false + [false_expr],
-                                   is_func_block=False)
-        self.namespace = prev_namespace
-        self.depth = prev_depth
-        return ast.Conditional(
-            ast.Is(ast.Variable(var.name), subtype),
-            true_expr,
-            false_expr,
-            expr_type
-        )
-
-    # Where
-
-    def _filter_subtypes(self, subtypes, initial_type):
-        """Filter out types that cannot be smart casted.
-
-        The types that cannot be smart casted are Type Variables and
-        Parameterized Types. The only exception is Kotlin in which we can
-        smart cast parameterized types.
-        """
-        new_subtypes = []
-        for t in subtypes:
-            if t.is_type_var():
-                continue
-            if self.language != 'kotlin':
-                # We can't check the instance of a parameterized type due
-                # to type erasure. The only exception is Kotlin, see below.
-                if not t.is_parameterized():
-                    new_subtypes.append(t)
-                continue
-
-            # In Kotlin, you can smart cast a parameterized type like the
-            # following.
-
-            # class A<T>
-            # class B<T> extends A<T>
-            # fun test(x: A<String>) {
-            #   if (x is B) {
-            #      // the type of x is B<String> here.
-            #   }
-            # }
-            if t.is_parameterized():
-                t_con = t.t_constructor
-                if t_con.is_subtype(initial_type):
-                    continue
-            new_subtypes.append(t)
-        return new_subtypes
 
 
     def gen_lambda(self,
@@ -1918,12 +1115,6 @@ class RustGenerator(Generator):
                       only_leaves=False,
                       subtype=True) -> ast.FunctionCall:
         """Generate a function call.
-
-        The function call could be either a normal function call, or a function
-        call from a function reference.
-        Note that this function may generate a new function/class as a side
-        effect.
-
         Args:
             etype: the type that the function call should return.
             only_leaves: do not generate new leaves except from `expr`.
@@ -1936,8 +1127,6 @@ class RustGenerator(Generator):
             ref_call = self._gen_func_call_ref(etype, only_leaves, subtype)
             if ref_call:
                 return ref_call
-            # NOTE we could use _gen_func_call to generate function references
-            # for producing function calls, but then we should always cast them.
         func_call = self._gen_func_call(etype, only_leaves, subtype)
         return func_call
 
@@ -1981,11 +1170,6 @@ class RustGenerator(Generator):
             else:
                 type_fun_rec = type_fun.receiver_t
                 if type_fun.receiver_t.is_type_constructor():
-                    '''
-                    type_fun_rec, _ = tu.instantiate_type_constructor(
-                        type_fun.receiver_t, self.get_types(),
-                        type_var_map=type_fun.receiver_inst,)
-                    '''
                     type_fun_rec, _ = self.instantiate_type_constructor(type_fun.receiver_t, self.get_types(), type_fun.receiver_inst)
                 receiver = self.generate_expr(type_fun_rec, only_leaves)
             funcs.append(gu.AttrReceiverInfo(receiver, type_fun.receiver_inst,
@@ -2016,25 +1200,9 @@ class RustGenerator(Generator):
             expr_type = tp.substitute_type(param.get_type(), params_map)
             gen_bottom = expr_type.is_wildcard() or (
                 expr_type.is_parameterized() and expr_type.has_wildcards())
-            if not param.vararg:
-                arg = self.generate_expr(expr_type, only_leaves,
-                                         gen_bottom=gen_bottom)
-                if param.default:
-                    if self.language in ['kotlin', 'scala'] and ut.random.bool():
-                        # Randomly skip some default arguments.
-                        args.append(ast.CallArgument(arg, name=param.name))
-                else:
-                    args.append(ast.CallArgument(arg))
-
-            else:
-                # This param is a vararg, so provide a random number of
-                # arguments.
-                for _ in range(ut.random.integer(0, 3)):
-                    args.append(ast.CallArgument(
-                        self.generate_expr(
-                            expr_type.type_args[0],
-                            only_leaves,
-                            gen_bottom=gen_bottom)))
+            arg = self.generate_expr(expr_type, only_leaves,
+                                        gen_bottom=gen_bottom)
+            args.append(ast.CallArgument(arg))
         self.depth = initial_depth
         type_args = (
             []
@@ -2138,43 +1306,7 @@ class RustGenerator(Generator):
                 if impl.trait == trait_type:
                     return self.gen_new(impl.struct)
         assert False, "There should be a struct with a matching impl"
-    
-    '''
-    def _concretize_type(self, t, prev_type_map):
-        """ Replace abstract trait type with a matching concrete type implementing this trait 
-            By design of creating trait bounds, there should exist a matching struct
-        """
-        if t in prev_type_map:
-            #type parameter has been concretized already
-            return prev_type_map[t]
-        if t.is_type_var() and t.bound is not None:
-            trait_type = deepcopy(t.bound)
-            if trait_type.is_parameterized():
-                trait_type.type_args = [self._concretize_type(t_arg, prev_type_map) for t_arg in trait_type.type_args]
-            for s_name, lst in self._impls.items():
-                for (impl, s_map, t_map) in lst:
-                    impl_type_map = {t_param: self.select_type() for t_param in impl.type_parameters}
-                    if not impl.trait.has_type_variables():
-                        if impl.trait == trait_type:
-                            updated_type = tp.substitute_type(impl.struct, impl_type_map)
-                            return updated_type
-                    else:
-                        trait_map = tu.unify_types(trait_type, impl.trait, self.bt_factory, same_type=False)
-                        if not trait_map:
-                            continue
-                        impl_type_map.update(trait_map)
-                        updated_type = tp.substitute_type(impl.struct, impl_type_map)
-                        return updated_type
-        if t.is_parameterized():
-            updated_type_args = []
-            for t_arg in t.type_args:
-                updated_type_args.append(self._concretize_type(t_arg, prev_type_map))
-            updated_type = deepcopy(t)
-            updated_type.type_agrs = updated_type_args
-            return updated_type
-        return t
-    '''
-
+  
     # pylint: disable=unused-argument
     def gen_new(self,
                 etype: tp.Type,
@@ -2182,13 +1314,6 @@ class RustGenerator(Generator):
                 subtype=True,
                 sam_coercion=False) -> ast.New:
         """Create a new object of a given type.
-
-        This could be:
-            * Function type
-            * SAM type
-            * Parameterized Type
-            * Simple Classifier Type
-
         Args:
             etype: the type for which we want to create an object
             only_leaves: do not generate new leaves except from `expr`.
@@ -2197,32 +1322,11 @@ class RustGenerator(Generator):
         """
         if getattr(etype, 'is_function_type', lambda: False)():
             return self._gen_func_ref_lambda(etype, only_leaves=only_leaves)
-        # Apply SAM coercion
-        if (sam_coercion and tu.is_sam(self.context, etype)
-                and ut.random.bool(cfg.prob.sam_coercion)):
-            type_var_map = tu.get_type_var_map_from_ptype(etype)
-            sam_sig_etype = tu.find_sam_fun_signature(
-                    self.context,
-                    etype,
-                    self.bt_factory.get_function_type,
-                    type_var_map=type_var_map
-            )
-            if sam_sig_etype:
-                return self._gen_func_ref_lambda(sam_sig_etype,
-                                                 only_leaves=only_leaves)
         
         s_decl = None
         for struct in self.context.get_structs(self.namespace).values():
             if struct.name == etype.name:
                 s_decl = struct
-        '''if isinstance(etype, tp.ParameterizedType):
-            etype = etype.to_variance_free()
-        else:
-            struct_name = etype.get_name()
-            struct_decl = self.context.get_structs(('global',)).get(struct_name)
-            
-            return self.gen_struct_inst(struct_decl)
-        '''
         news = {
             self.bt_factory.get_any_type(): ast.New(
                 self.bt_factory.get_any_type(), args=[]),
@@ -2233,34 +1337,17 @@ class RustGenerator(Generator):
         if con is not None:
             return con
         
-        #instantiating a new struct in Rust
-        #if self.language == 'rust' and isinstance(etype, tp.SimpleClassifier):
         if s_decl is None or etype.name in self._blacklisted_structs:
             t = etype
-            # If the etype corresponds to a type variable not belonging to
-            # to the current namespace, then create a bottom constant
-            # whose type is unknown. This means that the corresponding
-            # translator won't perform cast on this constant.
             if etype.is_type_var() and (
                     etype.name not in self._get_type_variable_names()):
                 t = None
             return ast.BottomConstant(t)
         
         if etype.is_type_constructor():
-            '''
-            etype, _ = tu.instantiate_type_constructor(
-                etype, self.get_types(),
-                disable_variance_functions=self.disable_variance_functions,
-                enable_pecs=self.enable_pecs)
-            '''
             etype, _ = self.instantiate_type_constructor(etype, self.get_types())
         if s_decl.is_parameterized() and (
               s_decl.get_type().name != etype.name):
-            '''etype, _ = tu.instantiate_type_constructor(
-                s_decl.get_type(), self.get_types(),
-                disable_variance_functions=self.disable_variance_functions,
-                enable_pecs=self.enable_pecs)
-            '''
             etype, _ = self.instantiate_type_constructor(s_decl.get_type(), self.get_types())
         # If the matching struct is a parameterized one, we need to create
         # a map mapping the struct's type parameters with the corresponding
@@ -2277,9 +1364,6 @@ class RustGenerator(Generator):
         self.move_semantics = True
         for field in s_decl.fields:
             expr_type = tp.substitute_type(field.get_type(), type_param_map)
-            # Generate a bottom value, if we are in this case:
-            # class A(val x: A)
-            # Generating a bottom constants prevents us from infinite loops.
             gen_bottom = expr_type.name == etype.name or (self.depth > (
                 cfg.limits.max_depth * 2) and not expr_type.is_primitive())
             args.append(self.generate_expr(expr_type, only_leaves,
@@ -2293,44 +1377,8 @@ class RustGenerator(Generator):
         field_names = [f.name for f in s_decl.fields]
         self.move_semantics = prev_move_semantics
         return ast.StructInstantiation(s_decl.name, etype, field_names, args)
-        #return ast.New(new_type, args)
 
     # Where
-
-    def _get_subclass(self,
-                      etype: tp.Type,
-                      subtype=True) -> ast.ClassDeclaration:
-        """"Find a subclass that is a subtype of the given type and is a
-        regular class.
-
-        Args:
-            etype: the type for which we are searching for subclasses.
-            subtype: The type could be a subtype of `etype`.
-        """
-        class_decls = self.context.get_classes(self.namespace).values()
-        # Get all classes that are subtype of the given type, and there
-        # are regular classes (no interfaces or abstract classes).
-        subclasses = []
-        for c in class_decls:
-            if c.class_type != ast.ClassDeclaration.REGULAR:
-                continue
-            if c.is_parameterized():
-                t_con = getattr(etype, 't_constructor', None)
-                if c.get_type() == t_con or (
-                        subtype and c.get_type().is_subtype(etype)):
-                    subclasses.append(c)
-            else:
-                if c.get_type() == etype or (
-                        subtype and c.get_type().is_subtype(etype)):
-                    subclasses.append(c)
-        if not subclasses:
-            return None
-        # FIXME what happens if subclasses is empty?
-        # it may happens due to ParameterizedType with TypeParameters as targs
-        return ut.random.choice(
-            [s for s in subclasses if s.name == etype.name] or subclasses)
-
-    # And
 
     def _gen_func_ref_lambda(self, etype:tp.Type, only_leaves=False):
         """Generate a function reference or a lambda for a given signature.
@@ -2341,19 +1389,7 @@ class RustGenerator(Generator):
         Returns:
             ast.Lambda or ast.FunctionReference
         """
-        # We are unable to produce function references in super calls.
-        if ut.random.bool(cfg.prob.func_ref) and not self._in_super_call:
-            func_ref = self._gen_func_ref(etype, only_leaves=only_leaves)
-            if func_ref:
-                return func_ref
-
-        #DISABLING Lambdas for now for Rust!!!! Change this later
-        #func_ref = self._gen_func_ref(etype, only_leaves=only_leaves)
-        #if func_ref:
-        #    return func_ref
-
-        # Generate Lambda
-        ret_type, params = self._gen_ret_and_paramas_from_sig(etype, True)
+        ret_type, params = self._gen_ret_and_paramas_from_sig(etype)
         return self.gen_lambda(etype=ret_type, params=params,
                                only_leaves=only_leaves)
 
@@ -2461,24 +1497,19 @@ class RustGenerator(Generator):
             ],
         }
         other_candidates = [
-            lambda x: self.gen_field_access(x, only_leaves, subtype), #disabled for now for Rust
+            lambda x: self.gen_field_access(x, only_leaves, subtype),
             lambda x: self.gen_conditional(x, only_leaves=only_leaves,
                                            subtype=subtype),
-            #lambda x: self.gen_is_expr(x, only_leaves=only_leaves,
-            #                           subtype=subtype),
             gen_fun_call,
             gen_variable
         ]
 
-        if self.language == "rust" and len(self.namespace) > 3 and self.namespace[1][0].isupper() and self.namespace[-2][0].islower():
+        if len(self.namespace) > 3 and self.namespace[1][0].isupper() and self.namespace[-2][0].islower():
             other_candidates.remove(gen_fun_call) #removing function calls for inner trait functions for Rust
             if expr_type == self.bt_factory.get_void_type():
                 return [lambda x: ast.BottomConstant(x)]
 
         if expr_type == self.bt_factory.get_void_type():
-            # The assignment operator in Java evaluates to the assigned value.
-            #if self.language == 'java':
-            #    return [gen_fun_call]
             return [gen_fun_call,
                     lambda x: self.gen_assignment(x, only_leaves)]
 
@@ -2545,19 +1576,12 @@ class RustGenerator(Generator):
         type_params = []
         if not exclude_type_vars:
             t_params = self.context.get_types(namespace=self.namespace, only_current=True) \
-                if self._inside_inner_function and self.language == 'rust' else self.context.get_types(self.namespace)
-            #t_params = self.context.get_types(self.namespace)
+                if self._inside_inner_function else self.context.get_types(self.namespace)
             for t_param in t_params.values():
-                variance = getattr(t_param, 'variance', None)
-                if exclude_covariants and variance == tp.Covariant:
-                    continue
-                if exclude_contravariants and variance == tp.Contravariant:
-                    continue
                 type_params.append(t_param)
 
         if type_params and ut.random.bool():
             return type_params
-
 
         builtins = list(self.ret_builtin_types
                         if ret_types
@@ -2606,19 +1630,6 @@ class RustGenerator(Generator):
         stype = ut.random.choice(types)
         if stype.is_type_constructor():
             exclude_type_vars = stype.name == self.bt_factory.get_array_type().name
-            '''
-            stype, _ = tu.instantiate_type_constructor(
-                stype, self.get_types(exclude_arrays=True,
-                                      exclude_covariants=True,
-                                      exclude_contravariants=True,
-                                      exclude_type_vars=exclude_type_vars,
-                                      exclude_function_types=exclude_function_types,
-                                      exclude_usr_types=exclude_usr_types),
-                enable_pecs=self.enable_pecs,
-                disable_variance_functions=self.disable_variance_functions,
-                variance_choices={}
-            )
-            '''
             stype, _ = self.instantiate_type_constructor(
                 stype, self.get_types(exclude_arrays=True,
                                       exclude_covariants=True,
@@ -2651,7 +1662,6 @@ class RustGenerator(Generator):
             return []
         type_params = []
         type_param_names = blacklist or []
-        variances = [tp.Invariant, tp.Covariant, tp.Contravariant]
         limit = (
             # In case etype is Function3<T1, T2, T3, F_N>
             4
@@ -2663,22 +1673,14 @@ class RustGenerator(Generator):
             name = ut.random.caps(blacklist=type_param_names)
             type_param_names.append(name)
             if for_function:
-                # OK we do this trick for type parameters corresponding to
-                # functions in order to avoid conflicts with type variables
-                # of classes. TODO: consider being less conservative.
                 name = "F_" + name
             if for_impl:
                 name = "I_" + name
-            variance = None
-            if with_variance and ut.random.bool():
-                variance = ut.random.choice(variances)
             bound = None
 
-            if True: #ut.random.bool(cfg.prob.bounded_type_parameters):
-                exclude_covariants = variance == tp.Contravariant or for_function
-                exclude_contravariants = True
+            if ut.random.bool(cfg.prob.bounded_type_parameters):
                 bound = self.choose_trait_bound()
-            type_param = tp.TypeParameter(name, variance=variance, bound=bound)
+            type_param = tp.TypeParameter(name, bound=bound)
             # Add type parameter to context.
             if add_to_context:
                 self.context.add_type(self.namespace, type_param.name, type_param)
@@ -2714,34 +1716,7 @@ class RustGenerator(Generator):
             return None
         choice = ut.random.choice(candidates)
         return choice
-    ### Internal helper functions ###
 
-    def _get_type_variable_names(self) -> List[str]:
-        """Get the name of type variables that are in place in the current
-        namespace.
-        """
-        return list(self.context.get_types(self.namespace).keys())
-
-    def _get_func_ret_type(self,
-                           params: List[ast.ParameterDeclaration],
-                           etype: tp.Type,
-                           not_void=False) -> tp.Type:
-        """Get return type for a function or lambda.
-
-        Args:
-            params: function parameters.
-            etype: use this type as the return type
-            not_void: do not return void
-        """
-        if etype is not None:
-            return etype
-        param_types = [p.param_type for p in params
-                       if getattr(p.param_type,
-                                  'variance', None) != tp.Contravariant]
-        if param_types and ut.random.bool():
-            return ut.random.choice(param_types)
-        ret = self.select_type(exclude_contravariants=True)
-        return ret
 
     def _get_struct(self,
                     etype: tp.Type
@@ -2763,56 +1738,16 @@ class RustGenerator(Generator):
                 return s, type_var_map
         return None
 
-    def _get_class(self,
-                   etype: tp.Type
-                  ) -> Tuple[ast.ClassDeclaration, tu.TypeVarMap]:
-        """Find the class declaration for a given type.
-        """
-        # Get class declaration based on the given type.
-        class_decls = self.context.get_classes(self.namespace).values()
-        for c in class_decls:
-            cls_type = c.get_type()
-            t_con = getattr(etype, 't_constructor', None)
-            # or t == t_con: If etype is a parameterized type (i.e.,
-            # getattr(etype, 't_constructor', None) != None), we need to
-            # get the class corresponding to its type constructor.
-            if cls_type.name == etype.name or cls_type == t_con:
-                if c.is_parameterized():
-                    type_var_map = {
-                        t_param: etype.type_args[i]
-                        for i, t_param in enumerate(c.type_parameters)
-                    }
-                else:
-                    type_var_map = {}
-                return c, type_var_map
-        return None
-
     def _get_var_type_to_search(self, var_type: tp.Type) -> tp.TypeParameter:
         """Get the type that we want to search for.
-
-        We exclude:
-            * built-ins
-            * type variables/wildcards without bounds
-            * type variables/wildcards with bounds to a type variable
-
         Args:
             var_type: The type of the variable.
 
         Returns:
             var_type or None
         """
-        # We are only interested in variables of class types.
         if tu.is_builtin(var_type, self.bt_factory) or var_type.is_type_var():
             return None
-        '''
-        if var_type.is_type_var() or var_type.is_wildcard():
-            args = [] if var_type.is_wildcard() else [self.bt_factory]
-            bound = var_type.get_bound_rec(*args)
-            if not bound or tu.is_builtin(bound, self.bt_factory) or (
-                  isinstance(bound, tp.TypeParameter)):
-                return None
-            var_type = bound
-        '''
         return var_type
 
     def _get_vars_of_function_types(self, etype: tp.Type):
@@ -2825,7 +1760,6 @@ class RustGenerator(Generator):
             ast.Variable or ast.FieldAccess
         """
         refs = []
-
         # Get variables without receivers
         variables = list(self.context.get_vars(self.namespace).values())
         variables += list(self.context.get_vars(
@@ -2841,54 +1775,8 @@ class RustGenerator(Generator):
                 etype, False, 'fields', func_ref=True, signature=True)
         for obj in objs:
             refs.append(ast.FieldAccess(obj.receiver_expr, obj.attr_decl.name))
-        
         return refs
 
-    # helper generators
-
-    def _gen_func_params(self) -> List[ast.ParameterDeclaration]:
-        """Generate parameters for a function or for a lambda.
-        """
-        params = []
-        arr_index = None
-        vararg_found = False
-        vararg = None
-        for i in range(ut.random.integer(0, cfg.limits.fn.max_params)):
-            param = self.gen_param_decl()
-            # If the type of the parameter is an array consider make it
-            # a vararg.
-            if not vararg_found and self._can_vararg_param(param) and (
-                    ut.random.bool()):
-                param.vararg = True
-                arr_index = i
-                vararg = param
-                vararg_found = True
-            params.append(param)
-        len_p = len(params)
-        # If one of the parameters is a vararg, then place it to the back.
-        if arr_index is not None and arr_index != len_p - 1:
-            params[len_p - 1], params[arr_index] = vararg, params[len_p - 1]
-        return params
-
-    # Where
-
-    def _can_vararg_param(self, param: ast.ParameterDeclaration) -> bool:
-        """Check if a parameter can be vararg.
-        """
-        if self.language == 'kotlin':
-            # TODO theosotr Can we do this in a better way? without hardcode?
-            # Actually in Kotlin, the type of varargs is Array<out T>.
-            # So, until we add support for use-site variance, we support
-            # varargs for 'primitive' types only which kotlinc treats them
-            # as specialized arrays.
-            t_constructor = getattr(param.get_type(), 't_constructor', None)
-            return isinstance(t_constructor, kt.SpecializedArrayType)
-        elif self.language == "scala":
-            return param.get_type().name == "Seq"
-        else:
-            # A vararg is actually a syntactic sugar for a parameter whose type
-            # is an array of something.
-            return param.get_type().name == 'Array'
 
     def _gen_func_body(self, ret_type: tp.Type):
         """Generate the body of a function or a lambda.
@@ -2914,36 +1802,14 @@ class RustGenerator(Generator):
         var_decls = [d for d in decls
                      if not isinstance(d, ast.ParameterDeclaration)]
         if (not var_decls and ret_type != self.bt_factory.get_void_type()):
-            # The function does not contain any declarations and its return
-            # type is not Unit. So, we can create an expression-based function.
-            #body = expr if ut.random.bool(cfg.prob.function_expr) else \
-             #   ast.Block([expr])
-            body = ast.Block([expr]) #enclosed in block for Rust
+            body = ast.Block([expr])
         else:
             exprs, decls = self._gen_side_effects()
             body = ast.Block(decls + exprs + [expr])
         return body
 
-    # Where
 
-    def _gen_side_effects(self) -> Tuple[List[ast.Expr], List[ast.Declaration]]:
-        """Generate expressions with side-effects for function bodies.
-
-        Example side-effects: assignment, variable declaration, etc.
-        """
-        exprs = []
-        for _ in range(ut.random.integer(0, cfg.limits.fn.max_side_effects)):
-            expr = self.generate_expr(self.bt_factory.get_void_type())
-            if expr:
-                exprs.append(expr)
-        # These are the new declarations that we created as part of the side-
-        # effects.
-        decls = self.context.get_declarations(self.namespace, True).values()
-        decls = [d for d in decls
-                 if not isinstance(d, ast.ParameterDeclaration)]
-        return exprs, decls
-
-    def _gen_ret_and_paramas_from_sig(self, etype, inside_lambda=False) -> \
+    def _gen_ret_and_paramas_from_sig(self, etype) -> \
             Tuple[tp.Type, ast.ParameterDeclaration]:
         """Generate parameters from signature and return them along with return
         type.
@@ -2966,19 +1832,6 @@ class RustGenerator(Generator):
                               signature: bool = False
                               ) -> List[gu.AttrReceiverInfo]:
         """Get objects that have an attribute of attr_name that is/return etype.
-
-        This function essentially searches for variables containing objects
-        whose class has either a field of a specific value or a function that
-        return a particular value.
-
-        As for func_ref and signatures there are the following scenarios:
-
-        1. func_ref = True and signature = False and attr_name = fields
-            -> find function references that return etype
-        2. func_ref = False and signature = True and attr_name = functions
-            -> find functions that have the given signature
-        2. func_ref = True and signature = True and attr_name = fields
-            -> find functions references that return etype (etype is signature)
 
         Args:
             etype: the targeted type that we are searching. Functions should
@@ -3028,15 +1881,6 @@ class RustGenerator(Generator):
                 if func_ref:
                     if not getattr(attr_type, 'is_function_type', lambda: False)():
                         continue
-                
-                #Handling of function calls on structs
-                if attr_name == 'functions':
-                    fun_type_var_map = {}
-                    if attr.is_parameterized():
-                        raise ValueError("Calls of parameterized functions on structs are not supported yet")
-                    else:
-                        fun_type_var_map = {}
-                    type_var_map.update(fun_type_var_map)
 
                 if not self._is_sigtype_compatible(
                         attr, etype, type_var_map,
@@ -3080,35 +1924,9 @@ class RustGenerator(Generator):
             is_compatible, updated_map = self._is_impl_compatible(s_map, type_var_map)
             if not is_compatible:
                 continue
-            for f in impl.functions:
+            for f in impl.avail_funcs:
                 updated_f = self._update_func_decl(f, updated_map)
                 funcs.append(updated_f)
-            '''
-            if not impl.type_parameters:
-                if s_map == type_var_map:
-                    funcs.extend(impl.functions)
-            else:
-                is_compatible = True
-                impl_type_map = {}
-                for key in s_map.keys():
-                    curr_inst = s_map[key]
-                    #Fix this: conflicting instantiations (I, I and i32, f64)
-                    if not curr_inst in impl.type_parameters and curr_inst != type_var_map[key]:
-                        is_compatible = False
-                        break
-                    if curr_inst in impl.type_parameters:
-                        impl_type_map[curr_inst] = type_var_map[key]
-                if is_compatible:
-                    for f in impl.functions:
-                        updated_f = self._update_func_decl(f, impl_type_map)
-                        funcs.append(updated_f)
-            if s_map == type_var_map:
-                curr_funcs = t_decl.function_signatures + t_decl.default_impls
-                updated_funcs = []
-                for f in curr_funcs:
-                    updated_funcs.append(self._update_func_decl(f, t_map))
-                funcs += updated_funcs
-            '''
         return funcs
 
     def _is_impl_compatible(self, impl_map, type_var_map):
@@ -3119,9 +1937,8 @@ class RustGenerator(Generator):
                 if curr_inst != type_var_map[key]:
                     return False, {}
             else:
-                #type_map = tu.unify_types(type_var_map[key], self._erase_bounds(curr_inst), self.bt_factory, same_type=False)
                 type_map = self.unify_types(type_var_map[key], curr_inst)
-                if not type_map:# or not self._map_fulfills_bounds(type_map):
+                if not type_map:
                     return False, {}
                 for (t_param, t) in type_map.items():
                     if t_param in updated_map.keys() and updated_map[t_param] != t:
@@ -3139,7 +1956,7 @@ class RustGenerator(Generator):
         """Get all available function declarations.
 
         This function searches functions in the current scope that return
-        `etype`, and then it also searches for receivers whose class has a
+        `etype`, and then it also searches for receivers whose struct has a
         function that return `etype` (a function with a specific signature
         type).
 
@@ -3156,8 +1973,6 @@ class RustGenerator(Generator):
             self.namespace[-2].islower() and
             self.namespace[-2] != 'global'
         )
-        # First find all top-level functions or methods included
-        # in the current class.
         msg = ("Searching for function declarations that match type {};"
                " checking signature {}")
         log(self.logger, msg.format(etype, signature))
@@ -3174,13 +1989,6 @@ class RustGenerator(Generator):
                 # Here we disallow nested functions to be used as function
                 # references
                 continue
-            if func.is_parameterized() and func.is_class_method():
-                # TODO: Consider being less conservative.
-                # The problem is when the class method is parameterized,
-                # the receiver is parameterized, and the type parameters
-                # of functions have bounds corresponding to the type parameters
-                # of class.
-                continue
 
             type_var_map = {}
             if func.is_parameterized():
@@ -3188,21 +1996,12 @@ class RustGenerator(Generator):
                                                    self.bt_factory)
                 if not func_type_var_map:
                     continue
-                '''
-                func_type_var_map = tu.instantiate_parameterized_function(
-                    func.type_parameters, self.get_types(),
-                    type_var_map=func_type_var_map, only_regular=True
-                )
-                '''
                 func_type_var_map = self.instantiate_parameterized_function(func.type_parameters, self.get_types(), func_type_var_map)
                 type_var_map.update(func_type_var_map)
 
             if not self._is_sigtype_compatible(func, etype, type_var_map,
                                                signature, subtype):
                 continue
-
-            # Nice to have:  add `this` explicitly as the receiver in methods
-            # of current class.
             functions.append(gu.AttrReceiverInfo(None, {}, func, type_var_map))
         return functions + self._get_matching_objects(etype, subtype,
                                                       'functions',
@@ -3221,16 +2020,15 @@ class RustGenerator(Generator):
                                  else self.concretize_type(t_param.bound, {}, defaultdict(int))
                                  for t_param in impl.type_parameters
                                 }
-                for f in impl.functions:
+                for f in impl.avail_funcs:
                     if f.get_type() == self.bt_factory.get_void_type():
                         continue
                     if not f.get_type().has_type_variables() or etype == self.bt_factory.get_void_type():
                         if f.get_type() != etype: #types do not match
                             continue
                     else:
-                        #type_map = tu.unify_types(etype, f.get_type(), self.bt_factory, same_type=False)
                         type_map = self.unify_types(etype, f.get_type())
-                        if not type_map:# or not self._map_fulfills_bounds(type_map): #types are not compatible
+                        if not type_map:
                             continue
                         impl_type_map.update(type_map)
                     #At this point, the function has the matching/compatible return type
@@ -3251,7 +2049,7 @@ class RustGenerator(Generator):
                            signature=False,
                            not_struct_func=False,
                            ) -> gu.AttrAccessInfo:
-        """ Generate a function or a class containing a function whose return
+        """ Generate a function or a impl containing a method whose return
         type is 'etype'.
 
         Args:
@@ -3263,7 +2061,7 @@ class RustGenerator(Generator):
         gen_call_on_struct = (
             ut.random.bool() and
             not not_struct_func and
-            not etype.is_type_var() and #functions returning parameterized types are not yet supported for trait/struct functions
+            not etype.is_type_var() and
             not etype.is_parameterized() and
             not etype == self.bt_factory.get_void_type()
         )
@@ -3285,118 +2083,18 @@ class RustGenerator(Generator):
             self.namespace = initial_namespace
             func_type_var_map = {}
             if func.is_parameterized():
-                '''
-                func_type_var_map = tu.instantiate_parameterized_function(
-                    func.type_parameters, self.get_types(),
-                    only_regular=True, type_var_map={})
-                '''
                 func_type_var_map = self.instantiate_parameterized_function(func.type_parameters, self.get_types(), {})
                 func_ret_type = func.get_type()
                 mapping = tu.unify_types(func_ret_type, etype, self.bt_factory)
-                func_type_var_map.update(mapping) #assigning correct type annotation for parameterized function (for Rust)
+                func_type_var_map.update(mapping)
                 
             msg = "Generating a method {} of type {}; TypeVarMap {}".format(
                 func.name, etype, func_type_var_map)
             log(self.logger, msg)
+
             return gu.AttrAccessInfo(None, {}, func, func_type_var_map)
-        #Only non-parameterized types are supported
         return self.gen_matching_impl(etype)
 
-    def _get_matching_class(self,
-                            etype: tp.Type,
-                            subtype: bool,
-                            attr_name: str,
-                            signature=False) -> gu.AttrAccessInfo:
-        """Get a class that has an attribute of attr_name that is/return etype.
-
-        This function essentially searches for a class that has either a field
-        of a specific value or a function that return a particular value.
-
-        Args:
-            etype: the targeted type that we are searching. Functions should
-                return that type.
-            subtype: The type of matching attribute could be a subtype of
-                `etype`.
-            attr_name: 'fields' or 'functions'
-            signature: etype is a signature.
-
-        Returns:
-            An AttrAccessInfo with a matched class type and attribute
-            declaration (field or function).
-        """
-        msg = "Searching for class that contains {} of type {}"
-        log(self.logger, msg.format(attr_name, etype))
-        class_decls = self._get_matching_class_decls(
-            etype, subtype=subtype, attr_name=attr_name, signature=signature)
-        if not class_decls:
-            return None
-        cls, type_var_map, attr = ut.random.choice(class_decls)
-        func_type_var_map = {}
-        is_parameterized_func = isinstance(
-            attr, ast.FunctionDeclaration) and attr.is_parameterized()
-        if cls.is_parameterized():
-            cls_type_var_map = type_var_map
-
-            variance_choices = (
-                None
-                if cls_type_var_map is None
-                else gu.init_variance_choices(cls_type_var_map)
-            )
-            cls_type, params_map = tu.instantiate_type_constructor(
-                cls.get_type(), self.get_types(),
-                only_regular=True, type_var_map=type_var_map,
-                enable_pecs=self.enable_pecs,
-                disable_variance_functions=self.disable_variance_functions,
-                variance_choices=variance_choices,
-                disable_variance=variance_choices is None
-            )
-            msg = ("Found parameterized class {} with TypeVarMap {} and "
-                   "incomplete TypeVarMap {}")
-            log(self.logger, msg.format(cls.name, params_map, type_var_map))
-            if is_parameterized_func:
-                # Here we have found a parameterized function in a
-                # parameterized class. So wee need to both instantiate
-                # the type constructor and the parameterized function.
-                types = tu._get_available_types(cls.get_type(),
-                                                self.get_types(),
-                                                True, False)
-                _, type_var_map = tu._compute_type_variable_assignments(
-                    cls.type_parameters + attr.type_parameters,
-                    types, type_var_map=type_var_map,
-                    variance_choices=variance_choices
-                )
-                params_map, func_type_var_map = tu.split_type_var_map(
-                    type_var_map, cls.type_parameters, attr.type_parameters)
-                targs = [
-                    params_map[t_param]
-                    for t_param in cls.type_parameters
-                ]
-                cls_type = cls.get_type().new(targs)
-            else:
-                # Here, we have a non-parameterized function in a parameterized
-                # class. So we only need to instantiate the type constructor.
-                cls_type, params_map = tu.instantiate_type_constructor(
-                    cls.get_type(), self.get_types(),
-                    only_regular=True, type_var_map=cls_type_var_map,
-                    enable_pecs=self.enable_pecs,
-                    variance_choices=variance_choices,
-                    disable_variance=variance_choices is None
-                )
-        else:
-            if is_parameterized_func:
-                # We are in a parameterized class defined in a class that
-                # is not a type constructor.
-                func_type_var_map = tu.instantiate_parameterized_function(
-                    attr.type_parameters, self.get_types(),
-                    only_regular=True, type_var_map=type_var_map)
-            cls_type, params_map = cls.get_type(), {}
-
-        attr_msg = "Attribute {}; type: {}, TypeVarMap{}".format(
-            attr_name, etype, func_type_var_map)
-        msg = "Selected class {} with TypeVarMap {};" " matches {}".format(
-            cls.name, params_map, attr_msg)
-        log(self.logger, msg)
-        return gu.AttrAccessInfo(cls_type, params_map, attr, func_type_var_map)
 
     def _is_sigtype_compatible(self, attr, etype, type_var_map,
                                check_signature, subtype,
@@ -3465,144 +2163,6 @@ class RustGenerator(Generator):
                                               check_signature, subtype)
         return is_comb, type_var_map
 
-    def _get_matching_class_decls(self,
-                                  etype: tp.Type,
-                                  subtype: bool,
-                                  attr_name: str,
-                                  signature=False
-                                 ) -> List[Tuple[ast.ClassDeclaration,
-                                                 tu.TypeVarMap,
-                                                 ast.Declaration]]:
-        """Get classes that have attributes of attr_name that are/return etype.
-
-        Args:
-            etype: the targeted type that we are searching. Functions should
-                return that type.
-            subtype: The type of matching attribute could be a subtype of
-                `etype`.
-            attr_name: 'fields' or 'functions'
-            signature: etype is a signature.
-
-        Returns:
-            A list of tuples that include class declarations, TypeVarMaps for
-            the attributes and the declarations of the attributes (fields or
-            functions).
-        """
-
-        class_decls = []
-        for c in self.context.get_classes(self.namespace).values():
-            for attr in self._get_class_attributes(c, attr_name):
-                attr_type = attr.get_type()
-                if not attr_type:
-                    continue
-                if attr_type == self.bt_factory.get_void_type():
-                    continue
-                # Avoid recursive decls because of incomplete information.
-                if attr.name == self.namespace[-1] and signature:
-                    continue
-
-                is_comb, type_var_map = self._is_signature_compatible(
-                    attr, etype, signature, subtype)
-                if not is_comb:
-                    continue
-                # Now here we keep the class and the function that match
-                # the given type.
-                class_decls.append((c, type_var_map, attr))
-        return class_decls
-
-    def _gen_matching_class(self,
-                            etype: tp.Type,
-                            attr_name: str,
-                            not_void=False,
-                            signature=False) -> gu.AttrAccessInfo:
-        """Generate a class that has an attribute of attr_name that is/return etype.
-
-        Args:
-            etype: the targeted type that we want to get. Functions should
-                return that type.
-            attr_name: 'fields' or 'functions'
-            not_void: Functions of the class should not return void.
-            signature: etype is a signature.
-
-        Returns:
-            An AttrAccessInfo for the generated class type and attribute
-            declaration (field or function).
-        """
-        initial_namespace = self.namespace
-        class_name = gu.gen_identifier('capitalize')
-        type_params = None
-
-        # Get return type, type_var_map, and flag for wildcards
-        if etype.has_type_variables():
-            # We have to create a class that has an attribute whose type
-            # is a type parameter. The only way to achieve this is to create
-            # a parameterized class, and pass the type parameter 'etype'
-            # as a type argument to the corresponding type constructor.
-            self.namespace = ast.GLOBAL_NAMESPACE + (class_name,)
-            type_params, type_var_map, can_wildcard = \
-                self._create_type_params_from_etype(etype)
-            etype2 = tp.substitute_type(etype, type_var_map)
-        else:
-            type_var_map, etype2, can_wildcard = {}, etype, False
-
-        self.namespace = ast.GLOBAL_NAMESPACE
-
-        # Create class
-        if attr_name == 'functions':
-            kwargs = {'fret_type': etype2} if not signature \
-                else {'signature': etype2}
-        else:
-            kwargs = {'field_type': etype2}
-        cls = self.gen_class_decl(**kwargs, not_void=not_void,
-                                  type_params=type_params,
-                                  class_name=class_name)
-        self.namespace = initial_namespace
-
-        # Get receiver
-        if cls.is_parameterized():
-            type_map = {v: k for k, v in type_var_map.items()}
-            if etype2.is_primitive() and (
-                    etype2.box_type() == self.bt_factory.get_void_type()):
-                type_map = None
-
-            if can_wildcard:
-                variance_choices = gu.init_variance_choices(type_map)
-            else:
-                variance_choices = None
-            cls_type, params_map = tu.instantiate_type_constructor(
-                cls.get_type(),
-                self.get_types(),
-                type_var_map=type_map,
-                enable_pecs=self.enable_pecs,
-                disable_variance_functions=self.disable_variance_functions,
-                variance_choices=variance_choices,
-                disable_variance=variance_choices is None
-            )
-        else:
-            cls_type, params_map = cls.get_type(), {}
-
-        # Generate func_type_var_map
-        for attr in getattr(cls, attr_name):
-            if not self._is_sigtype_compatible(attr, etype, params_map,
-                                               signature, False):
-                continue
-
-            func_type_var_map = {}
-            if isinstance(
-                    attr, ast.FunctionDeclaration) and attr.is_parameterized():
-                func_type_var_map = tu.instantiate_parameterized_function(
-                    attr.type_parameters, self.get_types(), only_regular=True,
-                    type_var_map=params_map)
-
-            msg = ("Generated a class {} with an attribute {} of type {}; "
-                   "ClassTypeVarMap {}, FuncTypeVarMap {}")
-            log(self.logger, msg.format(cls.name, attr_name, etype,
-                                        params_map, func_type_var_map))
-            return gu.AttrAccessInfo(cls_type, params_map, attr,
-                                     func_type_var_map)
-        return None
-
-    # Where
 
     def _create_type_params_from_etype(self, etype: tp.Type):
         """Generate type parameters for a type.
@@ -3614,38 +2174,18 @@ class RustGenerator(Generator):
         """
         if not etype.has_type_variables():
             return []
-        '''
-        #added for now, probably wrong
-        if isinstance(etype, tp.TypeConstructor):
-            type_map = {k: k for k in etype.type_parameters}
-            return etype.type_parameters, type_map, False
-        '''
+
         if isinstance(etype, tp.TypeParameter):
             type_params = self.gen_type_params(count=1)
             type_params[0].bound = etype.get_bound_rec(self.bt_factory)
-            type_params[0].variance = tp.Invariant
             return type_params, {etype: type_params[0]}, True
         
-        # the given type is parameterized
-        #assert isinstance(etype, (tp.ParameterizedType, tp.WildCardType))
-        
         type_vars = etype.get_type_variables(self.bt_factory)
-        type_params = self.gen_type_params(
-            len(type_vars), with_variance=self.language in ['kotlin', 'scala'])
+        type_params = self.gen_type_params(len(type_vars))
         type_var_map = {}
         available_type_params = list(type_params)
         can_wildcard = False
         for type_var, bounds in type_vars.items():
-            # The given type 'etype' has type variables.
-            # So, it's not safe to instantiate these type variables with
-            # wildcard types. In this way we prevent errors like the following.
-            #
-            # class A<T> {
-            #   B<T> foo();
-            # }
-            # A<? extends Number> x = new A<>();
-            # B<Number> = x.foo(); // error: incompatible types
-            # TODO: We may support this case in the future.
             can_wildcard = False
             bounds = list(bounds)
             type_param = ut.random.choice(available_type_params)
@@ -3660,26 +2200,6 @@ class RustGenerator(Generator):
             type_var_map[type_var] = type_param
         return type_params, type_var_map, can_wildcard
 
-
-
-
-    def gen_struct_inst(self, struct_decl: ast.StructDeclaration):
-        """Initialize a struct with values.
-           --deprecated
-        """
-        prev_move_semantics = self.move_semantics
-        self.move_semantics = True
-        initial_depth = self.depth
-        self.depth += 1
-        field_names = [field_decl.name for field_decl in struct_decl.fields]
-        field_exprs = []
-        for field_decl in struct_decl.fields:
-            gen_bottom = (self.depth > (cfg.limits.max_depth * 2))
-            matching_expr = self.generate_expr(field_decl.get_type(), only_leaves=True, exclude_var=True, gen_bottom=gen_bottom)
-            field_exprs.append(matching_expr)
-        self.depth = initial_depth
-        self.move_semantics = prev_move_semantics
-        return ast.StructInstantiation(struct_decl.name, field_names, field_exprs)
 
     def gen_struct_decl(self,
                         struct_name: str=None,
@@ -3761,67 +2281,38 @@ class RustGenerator(Generator):
             function_signatures=[],
             default_impls=[],
             supertraits=[],
-            structs_that_impl=[],
             type_parameters=type_params,
         )
         self._add_node_to_parent(ast.GLOBAL_NAMESPACE, trait)
         self._blacklisted_traits.add(trait_name)
-        supertrait = self._select_supertrait()
-        if supertrait:
-            trait.supertraits.extend(supertrait)
-        self.gen_trait_functions(fret_type=fret_type, not_void=not_void, signature=signature, only_signatures=True)
-        #self.gen_func_decl(fret_type, not_void=not_void, is_interface=False, trait_func=True)
+        self.gen_trait_functions(fret_type=fret_type, not_void=not_void, signature=signature)
+        self._blacklisted_traits.remove(trait_name)
         self._inside_trait_decl = False
         self.namespace = initial_namespace
         return trait
 
 
-    def _select_supertrait(self):
-        """Select a supertrait for a trait.
-           For now up to one supertrait is selected.
-        """
-        current_trait = self.namespace[-1]
-        trait_decls = [
-            t for t in self.context.get_traits(self.namespace).values()
-            if t.name != current_trait and t.name not in self._blacklisted_traits
-        ]
-        if not trait_decls:
-            return None
-        trait_decl = ut.random.choice(trait_decls)
-        if ut.random.bool():
-            return [trait_decl]
-        else:
-            return None
-
     def gen_trait_functions(self,
                             fret_type=None,
                             not_void=False,
-                            signature: tp.ParameterizedType=None,
-                            only_signatures=False) -> List[ast.FunctionDeclaration]:
+                            signature: tp.ParameterizedType=None) -> List[ast.FunctionDeclaration]:
         """ Generate trait signatures and default implementations.
         """
         funcs = []
         max_funcs = cfg.limits.cls.max_funcs - 1 if fret_type else cfg.limits.cls.max_funcs
         if fret_type:
-            func = self.gen_func_decl(fret_type, not_void=not_void, is_interface=only_signatures, trait_func=True)
+            func = self.gen_func_decl(fret_type, not_void=not_void, is_signature=ut.random.bool(), trait_func=True)
             funcs.append(func)
         if signature:
             ret_type, params = self._gen_ret_and_paramas_from_sig(signature)
-            func = self.gen_func_decl(ret_type, params=params, not_void=not_void, is_interface=only_signatures, trait_func=True)
+            func = self.gen_func_decl(ret_type, params=params, not_void=not_void, is_signature=ut.random.bool(), trait_func=True)
             func.trait_func = True
             funcs.append(func)
         for _ in range(ut.random.integer(0, max_funcs)):
-            func = self.gen_func_decl(not_void=not_void, is_interface=only_signatures, trait_func=True)
+            func = self.gen_func_decl(not_void=not_void, is_signature=ut.random.bool(), trait_func=True)
             funcs.append(func)
         return funcs
 
-    def _update_type_map(self, type_map, impl_type_params, fret_type):
-        """ Swap type parameters from Impl block with concrete types
-            Args:
-                type_map: type map of the struct
-                impl_type_params: type parameters of the impl block
-                fret_type: return type a function should have
-        """
 
     def gen_matching_impl(self, fret_type: tp.Type) -> gu.AttrAccessInfo:
         impl = self.gen_impl(fret_type)
@@ -3864,14 +2355,15 @@ class RustGenerator(Generator):
             #Generate candidate type parameters
             #Type params used in final declaration of impl block will be a subset of these,
             #depending on instantiations of struct and trait
-            impl_type_params = self.gen_type_params(add_to_context=False, count=3, for_impl=True)
+            impl_type_params = self.gen_type_params(add_to_context=False, count=cfg.limits.max_type_params, for_impl=True)
             #find or generate trait
             if fret_type is not None:
                 trait = self._get_matching_trait(fret_type)
                 if not trait:
                     trait = self._gen_matching_trait(fret_type, True)
             else:
-                available_traits = list(self.context.get_traits(self.namespace).values())
+                available_traits = [trait for trait in list(self.context.get_traits(self.namespace).values()) \
+                    if trait.name not in self._blacklisted_traits]
                 trait = self.gen_trait_decl() if not available_traits \
                     else ut.random.choice(available_traits)
             #find or generate struct
@@ -3889,9 +2381,14 @@ class RustGenerator(Generator):
             t_type, trait_map = _inst_type_constructor(trait)
         impl_id = self._get_impl_id(str(t_type), str(s_type))
         self.namespace = ast.GLOBAL_NAMESPACE + (impl_id,)
-
+        
         #Adding impl block info to _impls
-        impl = ast.Impl(impl_id, s_type, t_type, [], impl_type_params)
+        impl = ast.Impl(name=impl_id, 
+                        struct=s_type, 
+                        trait=t_type, 
+                        functions=[], 
+                        avail_funcs=[], 
+                        type_parameters=impl_type_params)
         if not struct.name in self._impls.keys():
             self._impls[struct.name] = []
         self._impls[struct.name].append((impl, struct_map, trait_map))
@@ -3907,31 +2404,23 @@ class RustGenerator(Generator):
             field_var_name ="self." + field.name
             #create a virtual variable declaration for each struct field
             var_decl = ast.VariableDeclaration(name=field_var_name, expr=None, var_type=field_type)
-            #var_decl.is_moved = not var_decl.get_type().is_primitive()
             var_decl.move_prohibited = self._type_moveable(var_decl)
             field_vars_list.append(var_decl)
         self._field_vars[impl_id] = field_vars_list
         
-        functions = []
-        for func_decl in trait.function_signatures:
+        for func_decl in trait.function_signatures + trait.default_impls:
             prev_ns = self.namespace
             self.namespace += (func_decl.name,)
             new_func = self._update_func_decl(func_decl, trait_map)
             new_func.body = self._gen_func_body(new_func.get_type())
-            functions.append(new_func)
-            self.namespace = prev_ns
-        for func_decl in trait.default_impls:
-            prev_ns = self.namespace
-            self.namespace += (func_decl.name,)
-            new_func = self._update_func_decl(func_decl, trait_map)
-            if ut.random.bool():
+            if func_decl in trait.default_impls:
                 #decide randomly to override the default implementation
-                new_func.body = self._gen_func_body(new_func.get_type())
-                functions.append(new_func)
+                if ut.random.bool():
+                    impl.functions.append(new_func)
+            else:
+                impl.functions.append(new_func)
+            impl.avail_funcs.append(new_func)
             self.namespace = prev_ns
-
-        trait.structs_that_impl.append(struct)
-        impl.functions = functions
         
         msg = ("Creating impl {}").format(impl_id)
         log(self.logger, msg)
@@ -3977,19 +2466,20 @@ class RustGenerator(Generator):
         return True
 
     def _get_matching_trait(self, fret_type: tp.Type):
-        trait_decls = self._get_matching_trait_decls(fret_type, False)
+        trait_decls = self._get_matching_trait_decls(fret_type)
         if not trait_decls:
             return None
         t, type_var_map, func = ut.random.choice(trait_decls)
         return t
 
     def _get_matching_trait_decls(self, 
-                                  fret_type: tp.Type,
-                                  subtype: bool) -> List[Tuple[ast.TraitDeclaration, tu.TypeVarMap, ast.FunctionDeclaration]]:
+                                  fret_type: tp.Type) -> List[Tuple[ast.TraitDeclaration, tu.TypeVarMap, ast.FunctionDeclaration]]:
         """ Get traits that have functions that return fret_type.
         """
         trait_decls = []
         for t in self.context.get_traits(self.namespace).values():
+            if t.name in self._blacklisted_traits:
+                continue
             for func in t.function_signatures + t.default_impls:
                 func_type = func.get_type()
                 if func_type == self.bt_factory.get_void_type():
