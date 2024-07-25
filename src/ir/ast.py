@@ -1533,14 +1533,12 @@ class TraitDeclaration(Declaration):
                  function_signatures: List[FunctionDeclaration] = [],
                  default_impls: List[FunctionDeclaration] = [],
                  supertraits: List[SuperTraitInstantiation] = [],
-                 structs_that_impl: List[StructDeclaration] = [],
                  type_parameters: List[types.TypeParameter] = []
                  ):
         self.name = name
         self.function_signatures = function_signatures
         self.default_impls = default_impls
         self.supertraits = supertraits
-        self.structs_that_impl = structs_that_impl  
         self.type_parameters = type_parameters
     
     @property
@@ -1568,7 +1566,8 @@ class TraitDeclaration(Declaration):
         supertraits = get_lst(len_func_signatures + len_default_impls, len_func_signatures + len_default_impls + len_supertraits)
         for i, c in enumerate(supertraits):
             self.supertraits[i] = c
-        type_params = get_lst(len_func_signatures + len_default_impls + len_supertraits, len_func_signatures + len_default_impls + len_supertraits + len_tp)
+        type_params = get_lst(len_func_signatures + len_default_impls + len_supertraits, len_func_signatures \
+            + len_default_impls + len_supertraits + len_tp)
         for i, c in enumerate(type_params):
             self.type_parameters[i] = c
 
@@ -1584,7 +1583,7 @@ class TraitDeclaration(Declaration):
 
     def __str__(self):
         return "trait {} {{\n  {} }}".format(
-            self.name, "\n  ".join(map(str, self.function_signatures))) #fix this when ast.trait ready 
+            self.name, "\n  ".join(map(str, self.function_signatures + self.default_impls)))
 
     def is_equal(self, other):
         if isinstance(other, TraitDeclaration):
@@ -1599,15 +1598,17 @@ class TraitDeclaration(Declaration):
 
 class Impl(Declaration):
     def __init__(self,
-                 impl_id: str,
+                 name: str,
                  struct: types.Type, 
                  trait: types.Type,
-                 functions: List[FunctionDeclaration] = [], #available functions that are implemented for this struct
+                 functions: List[FunctionDeclaration] = [], #functions defined inside impl block
+                 avail_funcs: List[FunctionDeclaration] = [], #all available funcs (including default impls from trait)
                  type_parameters: List[types.TypeParameter] = []):
-        self.name = impl_id
+        self.name = name
         self.struct = struct
         self.trait = trait
         self.functions = functions
+        self.avail_funcs = avail_funcs
         self.type_parameters = type_parameters
 
     @property
