@@ -77,7 +77,6 @@ class Context():
         self._remove_entity(namespace, 'decls', var_name)
 
     def remove_func(self, namespace, func_name):
-        #self._all_func_decls.pop(func_name)
         self._remove_entity(namespace, 'funcs', func_name)
         self._remove_entity(namespace, 'decls', func_name)
 
