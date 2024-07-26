@@ -712,7 +712,15 @@ class RustGenerator(Generator):
                 variable.get_type().has_wildcards()
             )
         )
+
+        rec_decl, prev_rec_move_prohibited = None, False
+        if receiver is not None:
+            #receiver cannot be moved in right side expression
+            rec_decl = self._get_decl_from_var(receiver)
+            rec_decl.move_prohibited = True
         right_side = self.generate_expr(variable.get_type(), only_leaves, subtype, gen_bottom=gen_bottom)
+        if rec_decl is not None:
+            rec_decl.move_prohibited = prev_rec_move_prohibited
         self.move_semantics = prev_move_semantics
         return ast.Assignment(variable.name, right_side,
                               receiver=receiver,)
@@ -1677,7 +1685,6 @@ class RustGenerator(Generator):
             if for_impl:
                 name = "I_" + name
             bound = None
-
             if ut.random.bool(cfg.prob.bounded_type_parameters):
                 bound = self.choose_trait_bound()
             type_param = tp.TypeParameter(name, bound=bound)
@@ -2076,10 +2083,16 @@ class RustGenerator(Generator):
                 else ast.GLOBAL_NAMESPACE
             )
             # Generate a function
+
+            if etype.has_type_variables():
+                type_params, _, _ = self._create_type_params_from_etype(etype)
+            else:
+                type_params = None
+
             params = None
             if signature:
                 etype, params = self._gen_ret_and_paramas_from_sig(etype)
-            func = self.gen_func_decl(etype, params=params, not_void=not_void)
+            func = self.gen_func_decl(etype, params=params, type_params=type_params, not_void=not_void)
             self.namespace = initial_namespace
             func_type_var_map = {}
             if func.is_parameterized():
