@@ -2163,42 +2163,27 @@ class RustGenerator(Generator):
                                               check_signature, subtype)
         return is_comb, type_var_map
 
-
     def _create_type_params_from_etype(self, etype: tp.Type):
-        """Generate type parameters for a type.
+        type_params = []
+        retrieved_type_params = self._retrieve_type_params(etype)
+        for t_param in retrieved_type_params:
+            if t_param not in type_params:
+                type_params.append(t_param)
+        mapping = {tv : tv for tv in type_params}
+        return type_params, mapping, False
 
-        Returns:
-            * A list of type parameters.
-            * A TypeVarMap for the type parameters.
-            * A boolean to declare if we can use wildcards.
-        """
-        if not etype.has_type_variables():
-            return []
+    def _retrieve_type_params(self, t):
+        if t.is_type_var():
+            if t.bound is None or not t.bound.has_type_variables():
+                return [t]
+            return self._retrieve_type_params(t.bound) + [t]
+        if t.is_parameterized():
+            res = []
+            for t_p in t.type_args:
+                res.extend(self._retrieve_type_params(t_p))
+            return res
+        return []
 
-        if isinstance(etype, tp.TypeParameter):
-            type_params = self.gen_type_params(count=1)
-            type_params[0].bound = etype.get_bound_rec(self.bt_factory)
-            return type_params, {etype: type_params[0]}, True
-        
-        type_vars = etype.get_type_variables(self.bt_factory)
-        type_params = self.gen_type_params(len(type_vars))
-        type_var_map = {}
-        available_type_params = list(type_params)
-        can_wildcard = False
-        for type_var, bounds in type_vars.items():
-            can_wildcard = False
-            bounds = list(bounds)
-            type_param = ut.random.choice(available_type_params)
-            available_type_params.remove(type_param)
-            if bounds != [None]:
-                type_param.bound = functools.reduce(
-                    lambda acc, t: t if t.is_subtype(acc) else acc,
-                    filter(lambda t: t is not None, bounds), bounds[0])
-            else:
-                type_param.bound = None
-            type_param.variance = tp.Invariant
-            type_var_map[type_var] = type_param
-        return type_params, type_var_map, can_wildcard
 
 
     def gen_struct_decl(self,
