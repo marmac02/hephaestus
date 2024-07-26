@@ -43,9 +43,6 @@ class RustGenerator(Generator):
 
         #This flag is used for Rust inner functions
         self._inside_inner_function = False
-
-        #This flag is used for Rust to handle function calls in inner functions inside trait declarations
-        self._inside_trait_decl = False
         
         self.function_type = type(self.bt_factory.get_function_type())
         self.function_types = self.bt_factory.get_function_types(
@@ -2267,7 +2264,6 @@ class RustGenerator(Generator):
                        type_params=None
                        ) -> ast.TraitDeclaration:
         """Generate a trait declaration."""
-        self._inside_trait_decl = True
         trait_name = trait_name or gu.gen_identifier('capitalize')
         initial_namespace = self.namespace
         self.namespace += (trait_name,)
@@ -2285,7 +2281,6 @@ class RustGenerator(Generator):
         self._blacklisted_traits.add(trait_name)
         self.gen_trait_functions(fret_type=fret_type, not_void=not_void, signature=signature)
         self._blacklisted_traits.remove(trait_name)
-        self._inside_trait_decl = False
         self.namespace = initial_namespace
         return trait
 
