@@ -374,7 +374,7 @@ class RustGenerator(Generator):
                     continue
             if self.flag_Fn or self.flag_FnMut:
                 if self.context.get_namespace(var) not in {namespace, ast.GLOBAL_NAMESPACE} and \
-                   self.move_semantics and self._type_moveable(var):
+                   self._type_moveable(var):
                     continue
             variables.append(var)
         return variables
