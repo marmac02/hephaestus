@@ -140,7 +140,7 @@ class RustGenerator(Generator):
             ret_type=self.bt_factory.get_void_type(),
             body=None,
             func_type=ast.FunctionDeclaration.FUNCTION)
-        self._add_node_to_parent(self.namespace, main_func)
+        self._add_node_to_parent(ast.GLOBAL_NAMESPACE, main_func)
         expr = self.generate_expr()
         decls = list(self.context.get_declarations(
             self.namespace, True).values())
@@ -234,24 +234,28 @@ class RustGenerator(Generator):
         for t_param, t in type_map.items():
             if t_param.bound is None:
                 continue
+            if t_param.bound == t:
+                continue
             if t.is_type_var() and t_param.bound == t.bound:
                 continue
+            fulfills = False
             trait_type = t_param.bound
             for (impl, _, _) in sum(self._impls.values(), []):
                 if visited_counter[impl.name] > self.instantiation_depth:
                     continue
                 if not impl.trait.has_type_variables():
                     if impl.trait == trait_type and is_struct_compatible(impl.struct, t, {}):
-                        return True
+                        fulfills = True
                 else:
                     visited_counter[impl.name] += 1
                     trait_map = self.unify_types(trait_type, impl.trait, visited_counter)
                     if not trait_map:
                         continue
                     if is_struct_compatible(impl.struct, t, trait_map):
-                        return True
+                        fulfills = True
             #No matching impl found for the type parameter
-            return False
+            if not fulfills:
+                return False
         return True
 
     def _concretize_map(self, type_map):
@@ -1141,7 +1145,6 @@ class RustGenerator(Generator):
             is_final=is_final,
             var_type=vtype,
             inferred_type=var_type)
-        #print(var_decl.name, init_etype, init_expr, expr)
         log(self.logger, "Adding variable {} to context in gen_variable_decl".format(var_decl.name))
         self._add_node_to_parent(self.namespace, var_decl)
         self.move_semantics = prev_move_semantics
@@ -2076,7 +2079,7 @@ class RustGenerator(Generator):
         self.move_semantics = prev_move_semantics
         if isinstance(receiver, ast.Variable):
             var_decl = self._get_decl_from_var(receiver)
-            var_decl.move_prohibited = self._type_moveable(var_decl)
+            var_decl.move_prohibited = self._type_moveable(var_decl)        
         return ast.FunctionCall(func.name, args, receiver,
                                 type_args=type_args, trait_func=trait_func)
 
@@ -2137,7 +2140,8 @@ class RustGenerator(Generator):
             rec_decl.move_prohibited = True
             rec_decl.is_moved = rt.is_FnOnce(signature)
         var_decl = self._get_decl_from_var(ast.Variable(name))
-        if var_decl is not None and rt.is_function_trait(var_decl.get_type()):
+        if var_decl is not None and (rt.is_function_trait(var_decl.get_type()) or \
+            (var_decl.get_type().is_type_var() and rt.is_function_trait(var_decl.get_type().bound))):
             var_decl.move_prohibited = True
             var_decl.is_moved = rt.is_FnOnce(signature)
         
@@ -2230,6 +2234,7 @@ class RustGenerator(Generator):
             subtype: The type could be a subtype of `etype`.
             sam_coercion: Apply sam coercion if possible.
         """
+        init_etype = etype
         if getattr(etype, 'is_function_type', lambda: False)():
             return self._gen_func_ref_lambda(etype, only_leaves=only_leaves)
         # Apply SAM coercion
@@ -2319,8 +2324,8 @@ class RustGenerator(Generator):
             new_type = new_type.new(etype.type_args)
         field_names = [f.name for f in s_decl.fields]
         self.move_semantics = prev_move_semantics
+        
         return ast.StructInstantiation(s_decl.name, etype, field_names, args)
-        #return ast.New(new_type, args)
 
     # Where
 
@@ -3022,9 +3027,8 @@ class RustGenerator(Generator):
                 if func_ref:
                     if not getattr(attr_type, 'is_function_type', lambda: False)():
                         continue
-                    if var.name.startswith("self.") and (rt.is_FnOnce(attr_type) or \
-                        rt.is_FnMut(attr_type)):
-                        #Call on FnOnce causes a move, which is not allowed on &self
+                    if rt.is_FnOnce(attr_type) and var.move_prohibited:
+                        #Call on FnOnce causes a move
                         continue
                     if rt.is_FnMut(attr_type) and getattr(var, 'is_final', True):
                         #FnMut cannot be called on immutable references
@@ -3180,6 +3184,7 @@ class RustGenerator(Generator):
                                                    self.bt_factory)
                 if not func_type_var_map:
                     continue
+                func_type_var_map.update(self._create_type_params_from_etype(etype)[1])
                 '''
                 func_type_var_map = tu.instantiate_parameterized_function(
                     func.type_parameters, self.get_types(),
@@ -3390,7 +3395,6 @@ class RustGenerator(Generator):
                                check_signature, subtype,
                                get_attr_type=lambda x, y: tp.substitute_type(
                                    x.get_type(), y)):
-        
         attr_type = get_attr_type(attr, type_var_map)
         if not check_signature:
             if subtype:
@@ -3428,10 +3432,13 @@ class RustGenerator(Generator):
                     continue
                 # Unify its component of attr with the corresponding type
                 # argument of etype.
+                '''
                 new_tvm = tu.unify_types(
                     etype.type_args[i], st,
                     self.bt_factory
                 )
+                '''
+                new_tvm = self.unify_types(etype.type_args[i], st)
                 if not new_tvm:
                     return False, None
                 for k, v in new_tvm.items():
@@ -3447,8 +3454,11 @@ class RustGenerator(Generator):
             # we can instantiate the corresponding type constructor
             # accordingly
             if attr_type.has_type_variables():
+                type_var_map = self.unify_types(etype, attr_type)
+                '''
                 type_var_map = tu.unify_types(etype, attr_type,
                                               self.bt_factory)
+                '''
         is_comb = self._is_sigtype_compatible(attr, etype, type_var_map,
                                               check_signature, subtype)
         return is_comb, type_var_map
