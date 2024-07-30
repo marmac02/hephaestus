@@ -437,10 +437,10 @@ class RustTranslator(BaseTranslator):
     
     @append_to
     def visit_type_param(self, node):
-        bound = ""
+        bound = "'static"
         if node.bound is not None:
-            bound = " : " + self.get_type_name(node.bound, is_bound=True)
-        return node.name + bound
+            bound += " + " + self.get_type_name(node.bound, is_bound=True)
+        return node.name + ": " + bound
     
     @append_to
     def visit_variable(self, node):
