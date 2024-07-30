@@ -83,8 +83,8 @@ class RustBuiltinFactory(bt.BuiltinFactory):
                [self.get_FnOnce_type(i) for i in range(0, max_parameters + 1)]
 
 def is_function_trait(t: tp.Type):
-    return t.is_parameterized() and \
-        (getattr(t.t_constructor, "is_function_trait", lambda: False)())
+    return getattr(t, "is_parameterized", lambda: False)() and \
+        getattr(t.t_constructor, "is_function_trait", lambda: False)()
 
 def is_Fn(t: tp.Type):
     return t.is_parameterized() and \
