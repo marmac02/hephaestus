@@ -211,22 +211,27 @@ class RustGenerator(Generator):
             if t_param.bound is None:
                 continue
             trait_type = t_param.bound
+            fulfills = False
             for (impl, _, _) in sum(self._impls.values(), []):
                 if visited_counter[impl.name] > cfg.limits.trait.max_concretization_depth:
                     continue
                 if not impl.trait.has_type_variables():
                     if impl.trait == trait_type and is_struct_compatible(impl.struct, t, {}):
-                        return True
+                        fulfills = True
+                        break
                 else:
                     visited_counter[impl.name] += 1
                     trait_map = self.unify_types(trait_type, impl.trait, visited_counter)
                     if not trait_map:
                         continue
                     if is_struct_compatible(impl.struct, t, trait_map):
-                        return True
+                        fulfills = True
+                        break
             #No matching impl found for the type parameter
-            return False
+            if not fulfills:
+                return False
         return True
+
 
     def _concretize_map(self, type_map):
         """ Replace abstract trait type parameter instantiation with a
