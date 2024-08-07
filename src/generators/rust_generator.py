@@ -2433,11 +2433,9 @@ class RustGenerator(Generator):
         """Update the type of a function declaration with the given type map.
         """
         new_func = deepcopy(func_decl)
-        new_func.inferred_type = new_func.ret_type = (t_map[func_decl.ret_type] if isinstance(func_decl.ret_type, tp.TypeParameter) 
-        else tp.substitute_type(func_decl.ret_type, t_map))
+        new_func.inferred_type = new_func.ret_type = tp.substitute_type(func_decl.ret_type, t_map)
         for i, param in enumerate(new_func.params):
-            new_func.params[i].param_type = t_map[param.param_type] if isinstance(param.param_type, tp.TypeParameter) \
-                else tp.substitute_type(param.param_type, t_map)
+            new_func.params[i].param_type = tp.substitute_type(param.param_type, t_map)
         return new_func
 
     def _get_impl_id(self, trait: str, struct: str):
