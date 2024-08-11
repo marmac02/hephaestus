@@ -257,6 +257,7 @@ class RustTranslator(BaseTranslator):
         self.indent = 0 if is_expression else self.indent + 2
         children = node.children()
         prev_is_unit = self.is_unit
+        self.is_unit = node.get_type() == rt.Unit
         prev_is_lambda = self.is_lambda
         self.is_lambda = True
         prev_cast_number = self._cast_number
