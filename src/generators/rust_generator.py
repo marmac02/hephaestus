@@ -452,7 +452,7 @@ class RustGenerator(Generator):
         prev_inside_inner_function = self._inside_inner_function
         self._inside_inner_function = nested_function
 
-        if (not nested_function and not trait_func):
+        if (not nested_function):
             if type_params is not None:
                 for t_p in type_params:
                     # We add the types to the context.
@@ -463,7 +463,6 @@ class RustGenerator(Generator):
                     for_function=True
                 ) if ut.random.bool(prob=cfg.prob.parameterized_functions) \
                   else []
-
         else:
             type_params = []
         if params is not None:
@@ -1854,6 +1853,8 @@ class RustGenerator(Generator):
         Returns:
             AttrReceiverInfo
         """
+        if etype == self.bt_factory.get_void_type():
+            return []
         decls = []
         variables = self.context.get_vars(self.namespace, only_current=self._inside_inner_function).values()
         for var in variables:
@@ -1871,11 +1872,21 @@ class RustGenerator(Generator):
                     type_map = dict(zip(trait_bound_type.t_constructor.type_parameters, trait_bound_type.type_args))
                 for f in trait_decl.function_signatures + trait_decl.default_impls:
                     updated_f = self._update_func_decl(f, type_map)
-                    if updated_f.get_type() == etype:
+                    func_type_var_map = {t_param: self.select_type() 
+                                         if t_param.bound is None 
+                                         else self.concretize_type(t_param.bound, {}, defaultdict(int))
+                                         for t_param in updated_f.type_parameters
+                                        }
+                    unify_map_func = self.unify_types(etype, updated_f.get_type())
+                    if updated_f.get_type().has_type_variables() and not unify_map_func:
+                        continue
+                    func_type_var_map.update(unify_map_func)
+                    if tp.substitute_type(updated_f.get_type(), func_type_var_map) == etype:
                         decls.append(gu.AttrReceiverInfo(
                             ast.Variable(var.name), {},
-                            updated_f, {})
+                            updated_f, func_type_var_map)
                         )
+            
             var_type = self._get_var_type_to_search(var.get_type())
             if not var_type:
                 continue
@@ -1890,6 +1901,19 @@ class RustGenerator(Generator):
                 if func_ref:
                     if not getattr(attr_type, 'is_function_type', lambda: False)():
                         continue
+
+                if attr_name == "functions":
+                    func_type_var_map = {t_param: self.select_type() 
+                                         if t_param.bound is None 
+                                         else self.concretize_type(t_param.bound, {}, defaultdict(int))
+                                         for t_param in attr.type_parameters
+                                        }
+                    unify_map_func = self.unify_types(etype, attr.get_type())
+                    if attr.get_type().has_type_variables() and not unify_map_func:
+                        #method type and etype incompatible
+                        continue
+                    func_type_var_map.update(unify_map_func)
+                    type_var_map.update(func_type_var_map)
 
                 if not self._is_sigtype_compatible(
                         attr, etype, type_var_map,
@@ -2030,6 +2054,11 @@ class RustGenerator(Generator):
                                  for t_param in impl.type_parameters
                                 }
                 for f in impl.avail_funcs:
+                    func_type_map = {t_param: self.select_type()
+                                     if t_param.bound is None
+                                     else self.concretize_type(t_param.bound, {}, defaultdict(int))
+                                     for t_param in f.type_parameters
+                            }
                     if f.get_type() == self.bt_factory.get_void_type():
                         continue
                     if not f.get_type().has_type_variables() or etype == self.bt_factory.get_void_type():
@@ -2039,7 +2068,11 @@ class RustGenerator(Generator):
                         type_map = self.unify_types(etype, f.get_type())
                         if not type_map:
                             continue
-                        impl_type_map.update(type_map)
+                        for (t_param, t) in type_map.items():
+                            if t_param in impl_type_map.keys():
+                                impl_type_map[t_param] = t
+                            if t_param in func_type_map.keys():
+                                func_type_map[t_param] = t
                     #At this point, the function has the matching/compatible return type
                     updated_s_map = {}
                     for key in s_map.keys():
@@ -2047,7 +2080,7 @@ class RustGenerator(Generator):
                         updated_s_map[key] = tp.substitute_type(curr_inst, impl_type_map)
                     updated_f = self._update_func_decl(f, impl_type_map)
                     updated_s_type = tp.substitute_type(impl.struct, impl_type_map)
-                    structs.append(gu.AttrAccessInfo(updated_s_type, updated_s_map, updated_f, None))
+                    structs.append(gu.AttrAccessInfo(updated_s_type, updated_s_map, updated_f, func_type_map))
         if not structs:
             return None
         return ut.random.choice(structs)
