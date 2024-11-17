@@ -65,8 +65,38 @@ class RustBuiltinFactory(bt.BuiltinFactory):
             types.remove(AnyType())
         return types
     
-    def get_fn_trait_classes(self):
-        return [FnTraitType]
+    def get_Fn_type(self, nr_type_parameters=0):
+        return Fn(nr_type_parameters)
+    
+    def get_FnMut_type(self, nr_type_parameters=0):
+        return FnMut(nr_type_parameters)
+    
+    def get_FnOnce_type(self, nr_type_parameters=0):
+        return FnOnce(nr_type_parameters)
+
+    def get_function_trait_types(self, max_parameters):
+        return [self.get_Fn_type(i) for i in range(0, max_parameters + 1)] + \
+               [self.get_FnMut_type(i) for i in range(0, max_parameters + 1)] + \
+               [self.get_FnOnce_type(i) for i in range(0, max_parameters + 1)]
+
+def is_function_constructor(t: tp.Type):
+    return t.name == "fn"
+
+def is_function_trait(t: tp.Type):
+    return getattr(t, "is_parameterized", lambda: False)() and \
+        getattr(t.t_constructor, "is_function_trait", lambda: False)()
+
+def is_Fn(t: tp.Type):
+    return t.is_parameterized() and \
+        isinstance(t.t_constructor, Fn)
+
+def is_FnMut(t: tp.Type):
+    return t.is_parameterized() and \
+        isinstance(t.t_constructor, FnMut)
+
+def is_FnOnce(t: tp.Type):
+    return t.is_parameterized() and \
+        isinstance(t.t_constructor, FnOnce)
 
 
 class RustBuiltin(tp.Builtin):
@@ -178,10 +208,27 @@ class FunctionType(tp.TypeConstructor):
         self.nr_type_parameters = nr_type_parameters
         super().__init__(fn_name, type_parameters)
 
-class FnTraitType(FunctionType):
+class Fn(FunctionType):
     name = "Fn"
     def __init__(self, nr_type_parameters: int):
         super().__init__(nr_type_parameters, name="Fn")
+    
+    def is_function_trait(self):
+        return True
+
+class FnMut(FunctionType):
+    def __init__(self, nr_type_parameters: int):
+        super().__init__(nr_type_parameters, name="FnMut")
+   
+    def is_function_trait(self):
+        return True
+
+class FnOnce(FunctionType):
+    def __init__(self, nr_type_parameters: int):
+        super().__init__(nr_type_parameters, name="FnOnce")
+    
+    def is_function_trait(self):
+        return True
 
 class AnyType(RustBuiltin):
     def __init__(self, name="ANY"):
