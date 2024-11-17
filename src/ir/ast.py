@@ -1357,10 +1357,11 @@ class FunctionCall(Expr):
 
 
 class FunctionReference(Expr):
-    def __init__(self, func: str, receiver: Expr, signature: types.Type):
+    def __init__(self, func: str, receiver: Expr, signature: types.Type, type_args=None):
         self.func = func
         self.receiver = receiver
         self.signature = signature
+        self.type_args = type_args
 
     def children(self):
         if not self.receiver:
