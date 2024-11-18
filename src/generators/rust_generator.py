@@ -2151,12 +2151,13 @@ class RustGenerator(Generator):
                     # Update function signature and type parameter map
                     updated_f = self._update_func_decl(f, impl_type_map)
                     for key in func_type_map.keys():
+                        curr_key = deepcopy(key)
                         curr_inst = deepcopy(func_type_map[key])
-                        if key.bound is not None:
-                            key.bound = tp.substitute_type(key.bound, impl_type_map)
+                        if curr_key.bound is not None:
+                            curr_key.bound = tp.substitute_type(curr_key.bound, impl_type_map)
                         if curr_inst.is_type_var() and curr_inst.bound is not None:
                             curr_inst.bound = tp.substitute_type(curr_inst.bound, impl_type_map)
-                        updated_func_type_map[key] = curr_inst
+                        updated_func_type_map[curr_key] = curr_inst
                     structs.append(gu.AttrAccessInfo(updated_s_type, updated_s_map, updated_f, updated_func_type_map))
         if not structs:
             return None
