@@ -443,16 +443,30 @@ class RustGenerator(Generator):
             return getattr(t, "get_type_variables", lambda x: [])(
                 self.bt_factory
             )
+
+        def get_type_vars_from_bounds(t):
+            type_vars = []
+            if t.is_type_var() and t.bound is not None:
+                type_vars_from_bound = get_type_vars(t.bound)
+                type_vars.extend(type_vars_from_bound)
+                for t_var in type_vars_from_bound:
+                    type_vars.extend(get_type_vars_from_bounds(t_var))
+            if t.is_parameterized():
+                for t_p in t.type_args:
+                    type_vars.extend(get_type_vars_from_bounds(t_p))
+            return type_vars
+
         outer_trait_type_params = self._get_outer_trait_type_params() #type params for outer trait if any
         all_type_vars = []
         param_types = [p.get_type() for p in params]
         for t in param_types + [ret_type]:
             all_type_vars.extend(get_type_vars(t))
-            all_type_vars.extend(self._get_type_vars_from_bounds(t))
+            all_type_vars.extend(get_type_vars_from_bounds(t))
         for t_param in all_type_vars:
             if t_param not in type_params and t_param not in outer_trait_type_params:
                 type_params.append(t_param)
         return type_params
+
 
     def _get_outer_trait_type_params(self):
         """ Function returns type parameters of the trait in whose namespace
@@ -2153,10 +2167,8 @@ class RustGenerator(Generator):
                     for key in func_type_map.keys():
                         curr_key = deepcopy(key)
                         curr_inst = deepcopy(func_type_map[key])
-                        if curr_key.bound is not None:
-                            curr_key.bound = tp.substitute_type(curr_key.bound, impl_type_map)
-                        if curr_inst.is_type_var() and curr_inst.bound is not None:
-                            curr_inst.bound = tp.substitute_type(curr_inst.bound, impl_type_map)
+                        curr_key = self._update_type(curr_key, impl_type_map)
+                        curr_inst = self._update_type(curr_inst, impl_type_map)
                         updated_func_type_map[curr_key] = curr_inst
                     structs.append(gu.AttrAccessInfo(updated_s_type, updated_s_map, updated_f, updated_func_type_map))
         if not structs:
@@ -2208,7 +2220,7 @@ class RustGenerator(Generator):
                     func_ret_type = func.get_type()
                     mapping = self.unify_types(etype, func_ret_type)
                 func_type_var_map = self.instantiate_parameterized_function(func.type_parameters, self.get_types(), mapping)
-                bounds_type_params = self._get_type_vars_from_bounds(func.get_type())
+                bounds_type_params = self._get_type_vars_recursively(func.get_type())
                 for t_param in func.type_parameters:
                     #For cases fn foo<T, P : Bound<T>>() -> P (T can't be arbitrarily instantiated)
                     if t_param in bounds_type_params:
@@ -2218,6 +2230,22 @@ class RustGenerator(Generator):
             log(self.logger, msg)
             return gu.AttrAccessInfo(None, {}, func, func_type_var_map)
         return self.gen_matching_impl(etype)
+
+
+    def _get_type_vars_recursively(self, t : tp.Type):
+        """Retrieve type variables from type recursively.
+           Method will return all type depends on, i.e. type variable bounds of type variables contained in the type.
+        """
+        type_vars = []
+        if t.is_type_var() and t.bound is not None:
+            type_vars_from_bound = self._get_type_vars_from_type(t.bound)
+            type_vars.extend(type_vars_from_bound)
+            for t_var in type_vars_from_bound:
+                type_vars.extend(self._get_type_vars_recursively(t_var))
+        if t.is_parameterized():
+            for t_p in t.type_args:
+                type_vars.extend(self._get_type_vars_recursively(t_p))
+        return type_vars
 
 
     def _is_sigtype_compatible(self, attr, etype, type_var_map,
